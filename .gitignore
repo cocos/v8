@@ -40,9 +40,9 @@
 .torquelint-cache
 .vscode
 /_*
-/base
-/build
-/buildtools
+#/base
+#/build
+#/buildtools
 /check-header-includes
 /Default/
 /out
@@ -65,7 +65,7 @@
 /third_party/*
 !/third_party/antlr4
 !/third_party/cpu_features
-/third_party/cpu_features/src
+#/third_party/cpu_features/src
 !/third_party/inspector_protocol
 !/third_party/jsoncpp
 /third_party/jsoncpp/source
@@ -115,3 +115,5 @@ bazel-bin
 bazel-out
 bazel-testlogs
 bazel-v8
+
+.cipdpkg
