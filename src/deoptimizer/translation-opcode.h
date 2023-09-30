@@ -19,7 +19,8 @@ namespace internal {
 
 #define TRANSLATION_OPCODE_LIST(V)                     \
   TRANSLATION_JS_FRAME_OPCODE_LIST(V)                  \
-  V(CONSTRUCT_STUB_FRAME, 3)                           \
+  V(CONSTRUCT_CREATE_STUB_FRAME, 2)                    \
+  V(CONSTRUCT_INVOKE_STUB_FRAME, 1)                    \
   V(BUILTIN_CONTINUATION_FRAME, 3)                     \
   IF_WASM(V, JS_TO_WASM_BUILTIN_CONTINUATION_FRAME, 4) \
   IF_WASM(V, WASM_INLINED_INTO_JS_FRAME, 3)            \
@@ -97,6 +98,21 @@ inline bool IsTranslationJsFrameOpcode(TranslationOpcode o) {
   static_assert(
       0 == static_cast<int>(TranslationOpcode::INTERPRETED_FRAME_WITH_RETURN));
   return static_cast<int>(o) < kNumTranslationJsFrameOpcodes;
+}
+
+inline std::ostream& operator<<(std::ostream& out, TranslationOpcode opcode) {
+  switch (opcode) {
+#define CASE(name, _)           \
+  case TranslationOpcode::name: \
+    out << #name;               \
+    break;
+    TRANSLATION_OPCODE_LIST(CASE)
+#undef CASE
+    default:
+      out << "BROKEN_OPCODE_" << static_cast<uint8_t>(opcode);
+      break;
+  }
+  return out;
 }
 
 #undef TRANSLATION_OPCODE_LIST

@@ -81,8 +81,8 @@ class TranslationArrayBuilder {
                              unsigned height, int return_value_offset,
                              int return_value_count);
   void BeginInlinedExtraArguments(int literal_id, unsigned height);
-  void BeginConstructStubFrame(BytecodeOffset bailout_id, int literal_id,
-                               unsigned height);
+  void BeginConstructCreateStubFrame(int literal_id, unsigned height);
+  void BeginConstructInvokeStubFrame(int literal_id);
   void BeginBuiltinContinuationFrame(BytecodeOffset bailout_id, int literal_id,
                                      unsigned height);
 #if V8_ENABLE_WEBASSEMBLY
@@ -210,6 +210,13 @@ class TranslationArrayBuilder {
   // Whether the builder can use MATCH_PREVIOUS_TRANSLATION in the current
   // translation.
   bool match_previous_allowed_ = true;
+
+  // Ensure that the frame counts are correct
+  void MarkFrameVisited(TranslationOpcode opcode);
+#ifdef DEBUG
+  int expected_frame_count_ = 0;
+  int expected_jsframe_count_ = 0;
+#endif
 };
 
 }  // namespace internal
