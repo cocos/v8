@@ -6,7 +6,7 @@
 #define V8_INSPECTOR_STRING_16_H_
 
 #include <stdint.h>
-#include <uchar.h>
+// #include <uchar.h>
 
 #include <cctype>
 #include <climits>
