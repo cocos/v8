@@ -1,5 +1,5 @@
 # -*- bazel-starlark -*-
-# Copyright 2023 The Chromium Authors. All rights reserved.
+# Copyright 2023 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Siso configuration for clang-cl/windows."""
@@ -195,6 +195,8 @@ def __step_config(ctx, step_config):
                     "third_party/depot_tools/win_toolchain/vs_files/27370823e7/Windows Kits/10/Include/10.0.22621.0/um/urlhist.h",
                     # chrome/updater/win/installer includes "msiquery.h"
                     "third_party/depot_tools/win_toolchain/vs_files/27370823e7/Windows Kits/10/Include/10.0.22621.0/um/msiquery.h",
+                    # third_party/win_virtual_display/controller includes "Devpropdef.h"
+                    "third_party/depot_tools/win_toolchain/vs_files/27370823e7/Windows Kits/10/Include/10.0.22621.0/shared/Devpropdef.h",
                 ],
             })
         step_config["rules"].extend([
@@ -205,6 +207,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang-cl",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang-cl/cc",
@@ -213,6 +216,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang-cl",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang-coverage/cxx",
@@ -225,6 +229,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang-cl",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang-coverage/cc",
@@ -237,6 +242,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang-cl",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
         ])
     return step_config

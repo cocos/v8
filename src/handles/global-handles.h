@@ -125,7 +125,7 @@ class V8_EXPORT_PRIVATE GlobalHandles final {
   size_t handles_count() const;
   size_t last_gc_custom_callbacks() const { return last_gc_custom_callbacks_; }
 
-  void IterateAllRootsWithClassIds(v8::PersistentHandleVisitor* v);
+  void IterateAllRootsForTesting(v8::PersistentHandleVisitor* v);
 
 #ifdef DEBUG
   void PrintStats();
@@ -199,7 +199,8 @@ class EternalHandles final {
   EternalHandles& operator=(const EternalHandles&) = delete;
 
   // Create an EternalHandle, overwriting the index.
-  V8_EXPORT_PRIVATE void Create(Isolate* isolate, Object object, int* index);
+  V8_EXPORT_PRIVATE void Create(Isolate* isolate, Tagged<Object> object,
+                                int* index);
 
   // Grab the handle for an existing EternalHandle.
   inline Handle<Object> Get(int index) {

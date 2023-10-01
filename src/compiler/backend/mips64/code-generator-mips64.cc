@@ -4053,13 +4053,7 @@ void CodeGenerator::AssembleArchBinarySearchSwitch(Instruction* instr) {
   for (size_t index = 2; index < instr->InputCount(); index += 2) {
     cases.push_back({i.InputInt32(index + 0), GetLabel(i.InputRpo(index + 1))});
   }
-
-  UseScratchRegisterScope temps(masm());
-  Register scratch = temps.Acquire();
-  // The input register may contains dirty data in upper 32 bits, explicitly
-  // sign-extend it here.
-  __ sll(scratch, input, 0);
-  AssembleArchBinarySearchSwitchRange(scratch, i.InputRpo(1), cases.data(),
+  AssembleArchBinarySearchSwitchRange(input, i.InputRpo(1), cases.data(),
                                       cases.data() + cases.size());
 }
 
@@ -4068,13 +4062,8 @@ void CodeGenerator::AssembleArchTableSwitch(Instruction* instr) {
   Register input = i.InputRegister(0);
   size_t const case_count = instr->InputCount() - 2;
 
-  UseScratchRegisterScope temps(masm());
-  Register scratch = temps.Acquire();
-  // The input register may contains dirty data in upper 32 bits, explicitly
-  // sign-extend it here.
-  __ sll(scratch, input, 0);
-  __ Branch(GetLabel(i.InputRpo(1)), hs, scratch, Operand(case_count));
-  __ GenerateSwitchTable(scratch, case_count, [&i, this](size_t index) {
+  __ Branch(GetLabel(i.InputRpo(1)), hs, input, Operand(case_count));
+  __ GenerateSwitchTable(input, case_count, [&i, this](size_t index) {
     return GetLabel(i.InputRpo(index + 2));
   });
 }
