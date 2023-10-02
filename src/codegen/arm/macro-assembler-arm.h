@@ -564,6 +564,9 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
 
   void LoadMap(Register destination, Register object);
 
+  void LoadFeedbackVector(Register dst, Register closure, Register scratch,
+                          Label* fbv_undef);
+
   void PushAll(RegList registers) {
     if (registers.is_empty()) return;
     ASM_CODE_COMMENT(this);
@@ -1063,7 +1066,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               Register function_address,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int stack_space, MemOperand* stack_space_operand,
-                              MemOperand return_value_operand);
+                              MemOperand return_value_operand, Label* done);
 
 #define ACCESS_MASM(masm) masm->
 

@@ -278,6 +278,17 @@ class MaglevAssembler : public MacroAssembler {
   inline void CheckInt32IsSmi(Register obj, Label* fail,
                               Register scratch = Register::no_reg());
 
+  // Add/Subtract a constant (not smi tagged) to a smi. Jump to {fail} if the
+  // result doesn't fit.
+  inline void SmiAddConstant(Register dst, Register src, int value, Label* fail,
+                             Label::Distance distance = Label::kFar);
+  inline void SmiAddConstant(Register reg, int value, Label* fail,
+                             Label::Distance distance = Label::kFar);
+  inline void SmiSubConstant(Register dst, Register src, int value, Label* fail,
+                             Label::Distance distance = Label::kFar);
+  inline void SmiSubConstant(Register reg, int value, Label* fail,
+                             Label::Distance distance = Label::kFar);
+
   inline void MoveHeapNumber(Register dst, double value);
 
   void TruncateDoubleToInt32(Register dst, DoubleRegister src);
@@ -323,6 +334,16 @@ class MaglevAssembler : public MacroAssembler {
   void MaterialiseValueNode(Register dst, ValueNode* value);
 
   inline void IncrementInt32(Register reg);
+  inline void IncrementAddress(Register reg, int32_t delta);
+  inline void LoadAddress(Register dst, MemOperand location);
+
+  // Depending on architecture either pushes the address on the target to the
+  // stack or sets link register to the target.
+  // Returns the number of words actually pushed on the stack (0 or 1).
+  inline int PushOrSetReturnAddressTo(Label* target);
+
+  inline void EmitEnterExitFrame(int extra_slots, StackFrame::Type frame_type,
+                                 Register c_function, Register scratch);
 
   inline MemOperand StackSlotOperand(StackSlot slot);
   inline void Move(StackSlot dst, Register src);
@@ -404,9 +425,6 @@ class MaglevAssembler : public MacroAssembler {
                                      Condition cond, Label* target,
                                      Label::Distance distance = Label::kFar);
 
-  inline void CompareInt32(Register reg, int32_t imm);
-  inline void CompareInt32(Register src1, Register src2);
-
   inline void CompareFloat64(DoubleRegister src1, DoubleRegister src2);
 
   inline void PrepareCallCFunction(int num_reg_arguments,
@@ -450,6 +468,16 @@ class MaglevAssembler : public MacroAssembler {
   inline void CompareInt32AndJumpIf(Register r1, int32_t value, Condition cond,
                                     Label* target,
                                     Label::Distance distance = Label::kFar);
+  inline void CompareInt32AndBranch(Register r1, int32_t value, Condition cond,
+                                    BasicBlock* if_true, BasicBlock* if_false,
+                                    BasicBlock* next_block);
+  inline void CompareInt32AndBranch(Register r1, Register r2, Condition cond,
+                                    BasicBlock* if_true, BasicBlock* if_false,
+                                    BasicBlock* next_block);
+  inline void CompareInt32AndAssert(Register r1, Register r2, Condition cond,
+                                    AbortReason reason);
+  inline void CompareInt32AndAssert(Register r1, int32_t value, Condition cond,
+                                    AbortReason reason);
   inline void CompareSmiAndJumpIf(Register r1, Tagged<Smi> value,
                                   Condition cond, Label* target,
                                   Label::Distance distance = Label::kFar);

@@ -1615,7 +1615,7 @@ class EmbedderGraphBuilder : public v8::PersistentHandleVisitor {
     EmbedderGraphBuilder builder(isolate, graph);
     reinterpret_cast<i::Isolate*>(isolate)
         ->global_handles()
-        ->IterateAllRootsWithClassIds(&builder);
+        ->IterateAllRootsForTesting(&builder);
   }
 
   void VisitPersistentHandle(v8::Persistent<v8::Value>* value,
@@ -2064,7 +2064,7 @@ TEST(GetHeapValueForDeletedObject) {
   CHECK(heap_profiler->FindObjectById(prop->GetId()).IsEmpty());
 }
 
-static int StringCmp(const char* ref, i::String act) {
+static int StringCmp(const char* ref, i::Tagged<i::String> act) {
   std::unique_ptr<char[]> s_act = act->ToCString();
   int result = strcmp(ref, s_act.get());
   if (result != 0)
@@ -3926,6 +3926,10 @@ TEST(SamplingHeapProfilerPretenuredInlineAllocations) {
 
   // Suppress randomness to avoid flakiness in tests.
   i::v8_flags.sampling_heap_profiler_suppress_randomness = true;
+
+  // Disable loop unrolling to have a more predictable number of allocations
+  // (loop unrolling could cause allocation folding).
+  i::v8_flags.turboshaft_loop_unrolling = false;
 
   GrowNewSpaceToMaximumCapacity(CcTest::heap());
 

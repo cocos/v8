@@ -1720,7 +1720,7 @@ void CodeStubAssembler::StoreBoundedSizeToObject(TNode<HeapObject> object,
                                                  TNode<IntPtrT> offset,
                                                  TNode<UintPtrT> value) {
 #ifdef V8_ENABLE_SANDBOX
-  CSA_DCHECK(this, UintPtrLessThan(
+  CSA_DCHECK(this, UintPtrLessThanOrEqual(
                        value, IntPtrConstant(kMaxSafeBufferSizeForSandbox)));
   TNode<Uint64T> raw_value = ReinterpretCast<Uint64T>(value);
   TNode<Uint64T> shift_amount = Uint64Constant(kBoundedSizeShift);
@@ -1825,7 +1825,7 @@ TNode<UintPtrT> CodeStubAssembler::ComputeCodePointerTableEntryOffset(
 }
 #endif  // V8_CODE_POINTER_SANDBOXING
 
-TNode<RawPtrT> CodeStubAssembler::LoadCodeEntrypointFromObject(
+TNode<RawPtrT> CodeStubAssembler::LoadCodeEntrypointViaIndirectPointerField(
     TNode<HeapObject> object, TNode<IntPtrT> field_offset) {
 #ifdef V8_CODE_POINTER_SANDBOXING
   TNode<RawPtrT> table =
@@ -1834,7 +1834,7 @@ TNode<RawPtrT> CodeStubAssembler::LoadCodeEntrypointFromObject(
       ComputeCodePointerTableEntryOffset(object, field_offset);
   return Load<RawPtrT>(table, offset);
 #else
-  return LoadObjectField<RawPtrT>(object, field_offset);
+  UNREACHABLE();
 #endif  // V8_CODE_POINTER_SANDBOXING
 }
 
@@ -11423,7 +11423,7 @@ TNode<FeedbackVector> CodeStubAssembler::LoadFeedbackVectorForStub() {
 
 TNode<FeedbackVector> CodeStubAssembler::LoadFeedbackVectorFromBaseline() {
   return CAST(
-      LoadFromParentFrame(InterpreterFrameConstants::kBytecodeOffsetFromFp));
+      LoadFromParentFrame(BaselineFrameConstants::kFeedbackVectorFromFp));
 }
 
 TNode<Context> CodeStubAssembler::LoadContextFromBaseline() {
@@ -14719,7 +14719,8 @@ TNode<String> CodeStubAssembler::Typeof(TNode<Object> value) {
 
   Label return_number(this, Label::kDeferred), if_oddball(this),
       return_function(this), return_undefined(this), return_object(this),
-      return_string(this), return_bigint(this), return_result(this);
+      return_string(this), return_bigint(this), return_symbol(this),
+      return_result(this);
 
   GotoIf(TaggedIsSmi(value), &return_number);
 
@@ -14750,9 +14751,9 @@ TNode<String> CodeStubAssembler::Typeof(TNode<Object> value) {
 
   GotoIf(IsBigIntInstanceType(instance_type), &return_bigint);
 
-  CSA_DCHECK(this, InstanceTypeEqual(instance_type, SYMBOL_TYPE));
-  result_var = HeapConstant(isolate()->factory()->symbol_string());
-  Goto(&return_result);
+  GotoIf(IsSymbolInstanceType(instance_type), &return_symbol);
+
+  Abort(AbortReason::kUnexpectedInstanceType);
 
   BIND(&return_number);
   {
@@ -14795,6 +14796,12 @@ TNode<String> CodeStubAssembler::Typeof(TNode<Object> value) {
   BIND(&return_bigint);
   {
     result_var = HeapConstant(isolate()->factory()->bigint_string());
+    Goto(&return_result);
+  }
+
+  BIND(&return_symbol);
+  {
+    result_var = HeapConstant(isolate()->factory()->symbol_string());
     Goto(&return_result);
   }
 
@@ -16056,7 +16063,14 @@ TNode<Code> CodeStubAssembler::GetSharedFunctionInfoCode(
 }
 
 TNode<RawPtrT> CodeStubAssembler::LoadCodeInstructionStart(TNode<Code> code) {
-  return LoadCodeEntrypointFromObject(code, Code::kInstructionStartOffset);
+#ifdef V8_CODE_POINTER_SANDBOXING
+  // In this case, the entrypoint is stored in the code pointer table entry
+  // referenced via the Code object's 'self' indirect pointer.
+  return LoadCodeEntrypointViaIndirectPointerField(
+      code, Code::kSelfIndirectPointerOffset);
+#else
+  return LoadObjectField<RawPtrT>(code, Code::kInstructionStartOffset);
+#endif
 }
 
 TNode<BoolT> CodeStubAssembler::IsMarkedForDeoptimization(TNode<Code> code) {

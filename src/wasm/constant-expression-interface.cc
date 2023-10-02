@@ -338,7 +338,7 @@ void ConstantExpressionInterface::ArrayNewSegment(
   }
 }
 
-void ConstantExpressionInterface::I31New(FullDecoder* decoder,
+void ConstantExpressionInterface::RefI31(FullDecoder* decoder,
                                          const Value& input, Value* result) {
   if (!generate_value()) return;
   Address raw = input.runtime_value.to_i32();
@@ -348,8 +348,8 @@ void ConstantExpressionInterface::I31New(FullDecoder* decoder,
   // same as i31.get_s.
   intptr_t shifted =
       static_cast<intptr_t>(raw << (kSmiTagSize + kSmiShiftSize + 1)) >> 1;
-  result->runtime_value =
-      WasmValue(handle(Smi(shifted), isolate_), wasm::kWasmI31Ref.AsNonNull());
+  result->runtime_value = WasmValue(handle(Tagged<Smi>(shifted), isolate_),
+                                    wasm::kWasmI31Ref.AsNonNull());
 }
 
 void ConstantExpressionInterface::DoReturn(FullDecoder* decoder,

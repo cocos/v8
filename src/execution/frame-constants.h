@@ -442,16 +442,18 @@ class ApiCallbackExitFrameConstants : public ExitFrameConstants {
 // 4+cp  |      argc       |   v                        |
 //       +-----------------+----                        |
 // 5+cp  |  BytecodeArray  |   ^                        |
-//       |- - - - - - - - -| Unoptimized code header    |
-// 6+cp  |  offset or FBV  |   v                        |
+//       |- - - - - - - - -|   |                        |
+// 6+cp  | offset / unused | Unoptimized code header    |
+//       |- - - - - - - - -|   |                        |
+// 7+cp  |      FBV        |   v                        |
 //       +-----------------+----                        |
-// 7+cp  |   register 0    |   ^                     Callee
+// 8+cp  |   register 0    |   ^                     Callee
 //       |- - - - - - - - -|   |                   frame slots
-// 8+cp  |   register 1    | Register file         (slot >= 0)
+// 9+cp  |   register 1    | Register file         (slot >= 0)
 //  ...  |       ...       |   |                        |
 //       |  register n-1   |   |                        |
 //       |- - - - - - - - -|   |                        |
-// 8+cp+n|   register n    |   v                        v
+// 9+cp+n|   register n    |   v                        v
 //  -----+-----------------+----- <-- stack ptr -------------
 //
 class UnoptimizedFrameConstants : public StandardFrameConstants {
@@ -459,9 +461,11 @@ class UnoptimizedFrameConstants : public StandardFrameConstants {
   // FP-relative.
   static constexpr int kBytecodeArrayFromFp =
       STANDARD_FRAME_EXTRA_PUSHED_VALUE_OFFSET(0);
-  static constexpr int kBytecodeOffsetOrFeedbackVectorFromFp =
+  static constexpr int kBytecodeOffsetOrUnusedSlot =
       STANDARD_FRAME_EXTRA_PUSHED_VALUE_OFFSET(1);
-  DEFINE_STANDARD_FRAME_SIZES(2);
+  static constexpr int kFeedbackVectorFromFp =
+      STANDARD_FRAME_EXTRA_PUSHED_VALUE_OFFSET(2);
+  DEFINE_STANDARD_FRAME_SIZES(3);
 
   static constexpr int kFirstParamFromFp =
       StandardFrameConstants::kCallerSPOffset;
@@ -470,8 +474,9 @@ class UnoptimizedFrameConstants : public StandardFrameConstants {
   static constexpr int kExpressionsOffset = kRegisterFileFromFp;
 
   // Expression index for {JavaScriptFrame::GetExpressionAddress}.
-  static constexpr int kBytecodeArrayExpressionIndex = -2;
-  static constexpr int kBytecodeOffsetOrFeedbackVectorExpressionIndex = -1;
+  static constexpr int kBytecodeArrayExpressionIndex = -3;
+  static constexpr int kBytecodeOffsetOrUnusedSlotExpressionIndex = -2;
+  static constexpr int kFeedbackVectorExpressionIndex = -1;
   static constexpr int kRegisterFileExpressionIndex = 0;
 
   // Returns the number of stack slots needed for 'register_count' registers.
@@ -481,27 +486,25 @@ class UnoptimizedFrameConstants : public StandardFrameConstants {
 };
 
 // Interpreter frames are unoptimized frames that are being executed by the
-// interpreter. In this case, the "offset or FBV" slot contains the bytecode
+// interpreter. In this case, the "offset or unused" slot contains the bytecode
 // offset of the currently executing bytecode.
 class InterpreterFrameConstants : public UnoptimizedFrameConstants {
  public:
   static constexpr int kBytecodeOffsetExpressionIndex =
-      kBytecodeOffsetOrFeedbackVectorExpressionIndex;
+      kBytecodeOffsetOrUnusedSlotExpressionIndex;
 
-  static constexpr int kBytecodeOffsetFromFp =
-      kBytecodeOffsetOrFeedbackVectorFromFp;
+  static constexpr int kBytecodeOffsetFromFp = kBytecodeOffsetOrUnusedSlot;
 };
 
 // Sparkplug frames are unoptimized frames that are being executed by
-// sparkplug-compiled baseline code. base. In this case, the "offset or FBV"
-// slot contains a cached pointer to the feedback vector.
+// sparkplug-compiled baseline code. base. In this case, the "offset or unused"
+// slot is free (unused).
 class BaselineFrameConstants : public UnoptimizedFrameConstants {
  public:
-  static constexpr int kFeedbackVectorExpressionIndex =
-      kBytecodeOffsetOrFeedbackVectorExpressionIndex;
+  static constexpr int kUnusedSlotExpressionIndex =
+      kBytecodeOffsetOrUnusedSlotExpressionIndex;
 
-  static constexpr int kFeedbackVectorFromFp =
-      kBytecodeOffsetOrFeedbackVectorFromFp;
+  static constexpr int kUnusedSlotFromFp = kBytecodeOffsetOrUnusedSlot;
 };
 
 inline static int FPOffsetToFrameSlot(int frame_offset) {

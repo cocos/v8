@@ -414,7 +414,6 @@ namespace internal {
   CPP(ArrayShift)                                                              \
   /* ES6 #sec-array.prototype.unshift */                                       \
   CPP(ArrayUnshift)                                                            \
-  CPP(ArrayFromAsync)                                                          \
   /* Support for Array.from and other array-copying idioms */                  \
   TFS(CloneFastJSArray, NeedsContext::kYes, kSource)                           \
   TFS(CloneFastJSArrayFillingHoles, NeedsContext::kYes, kSource)               \
@@ -656,11 +655,9 @@ namespace internal {
   TFH(LoadSuperICBaseline, LoadWithReceiverBaseline)                           \
   TFH(KeyedLoadIC, KeyedLoadWithVector)                                        \
   TFH(KeyedLoadIC_Megamorphic, KeyedLoadWithVector)                            \
-  TFH(KeyedLoadIC_MegamorphicStringKey, KeyedLoadWithVector)                   \
   TFH(KeyedLoadICTrampoline, KeyedLoad)                                        \
   TFH(KeyedLoadICBaseline, KeyedLoadBaseline)                                  \
   TFH(KeyedLoadICTrampoline_Megamorphic, KeyedLoad)                            \
-  TFH(KeyedLoadICTrampoline_MegamorphicStringKey, KeyedLoad)                   \
   TFH(StoreGlobalIC, StoreGlobalWithVector)                                    \
   TFH(StoreGlobalICTrampoline, StoreGlobal)                                    \
   TFH(StoreGlobalICBaseline, StoreGlobalBaseline)                              \
@@ -709,6 +706,7 @@ namespace internal {
   TFS(IterableToFixedArrayWithSymbolLookupSlow, NeedsContext::kYes, kIterable) \
   TFS(IterableToListMayPreserveHoles, NeedsContext::kYes, kIterable,           \
       kIteratorFn)                                                             \
+  TFS(IterableToListConvertHoles, NeedsContext::kYes, kIterable, kIteratorFn)  \
   IF_WASM(TFS, IterableToFixedArrayForWasm, NeedsContext::kYes, kIterable,     \
           kExpectedLength)                                                     \
                                                                                \

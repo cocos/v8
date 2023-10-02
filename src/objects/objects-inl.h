@@ -73,7 +73,8 @@ int PropertyDetails::field_width_in_words() const {
 }
 
 bool IsTaggedIndex(Tagged<Object> obj) {
-  return IsSmi(obj) && TaggedIndex::IsValid(TaggedIndex(obj.ptr()).value());
+  return IsSmi(obj) &&
+         TaggedIndex::IsValid(Tagged<TaggedIndex>(obj.ptr()).value());
 }
 
 DEF_HEAP_OBJECT_PREDICATE(HeapObject, IsClassBoilerplate) {
@@ -403,12 +404,6 @@ DEF_HEAP_OBJECT_PREDICATE(HeapObject, IsDeoptimizationData) {
 
 DEF_HEAP_OBJECT_PREDICATE(HeapObject, IsHandlerTable) {
   return IsFixedArrayExact(obj, cage_base);
-}
-
-DEF_HEAP_OBJECT_PREDICATE(HeapObject, IsTemplateList) {
-  if (!IsFixedArrayExact(obj, cage_base)) return false;
-  if (FixedArray::cast(obj)->length() < 1) return false;
-  return true;
 }
 
 DEF_HEAP_OBJECT_PREDICATE(HeapObject, IsDependentCode) {
@@ -821,12 +816,14 @@ void HeapObject::InitCodePointerTableEntryField(size_t offset, Isolate* isolate,
                                     entrypoint);
 }
 
-Address HeapObject::ReadCodeEntrypointField(size_t offset) const {
-  return i::ReadCodeEntrypointField(field_address(offset));
+Address HeapObject::ReadCodeEntrypointViaIndirectPointerField(
+    size_t offset) const {
+  return i::ReadCodeEntrypointViaIndirectPointerField(field_address(offset));
 }
 
-void HeapObject::WriteCodeEntrypointField(size_t offset, Address value) {
-  i::WriteCodeEntrypointField(field_address(offset), value);
+void HeapObject::WriteCodeEntrypointViaIndirectPointerField(size_t offset,
+                                                            Address value) {
+  i::WriteCodeEntrypointViaIndirectPointerField(field_address(offset), value);
 }
 
 ObjectSlot HeapObject::RawField(int byte_offset) const {
@@ -861,9 +858,9 @@ MapWord MapWord::FromMap(const Tagged<Map> map) {
 
 Tagged<Map> MapWord::ToMap() const {
 #ifdef V8_MAP_PACKING
-  return Map::unchecked_cast(Object(Unpack(value_)));
+  return Map::unchecked_cast(Tagged<Object>(Unpack(value_)));
 #else
-  return Map::unchecked_cast(Object(value_));
+  return Map::unchecked_cast(Tagged<Object>(value_));
 #endif
 }
 
@@ -901,7 +898,8 @@ Tagged<HeapObject> MapWord::ToForwardingAddress(
   // When external code space is enabled forwarding pointers are encoded as
   // Smi representing a diff from the source object address in kObjectAlignment
   // chunks.
-  intptr_t diff = static_cast<intptr_t>(Smi(value_).value()) * kObjectAlignment;
+  intptr_t diff =
+      static_cast<intptr_t>(Tagged<Smi>(value_).value()) * kObjectAlignment;
   Address address = map_word_host.address() + diff;
   return HeapObject::FromAddress(address);
 #else
@@ -911,7 +909,8 @@ Tagged<HeapObject> MapWord::ToForwardingAddress(
 
 #ifdef VERIFY_HEAP
 void HeapObject::VerifyObjectField(Isolate* isolate, int offset) {
-  VerifyPointer(isolate, TaggedField<Object>::load(isolate, *this, offset));
+  Object::VerifyPointer(isolate,
+                        TaggedField<Object>::load(isolate, *this, offset));
   static_assert(!COMPRESS_POINTERS_BOOL || kTaggedSize == kInt32Size);
 }
 
@@ -1046,10 +1045,10 @@ void HeapObject::set_map_after_allocation(Tagged<Map> value,
   } else {
     SLOW_DCHECK(
         // We allow writes of a null map before root initialisation.
-        value->is_null() ? !GetIsolateFromWritableObject(*this)
-                                ->read_only_heap()
-                                ->roots_init_complete()
-                         : !WriteBarrier::IsRequired(*this, value));
+        value.is_null() ? !GetIsolateFromWritableObject(*this)
+                               ->read_only_heap()
+                               ->roots_init_complete()
+                        : !WriteBarrier::IsRequired(*this, value));
   }
 #endif
 }
@@ -1347,6 +1346,8 @@ Tagged<Object> Object::GetSimpleHash(Tagged<Object> object) {
     int id = Script::cast(object)->id();
     return Smi::FromInt(ComputeUnseededHash(id) & Smi::kMaxValue);
   }
+
+  DCHECK(!InstanceTypeChecker::IsHole(instance_type));
   DCHECK(IsJSReceiver(object));
   return object;
 }
@@ -1357,7 +1358,8 @@ Tagged<Object> Object::GetHash(Tagged<Object> obj) {
   Tagged<Object> hash = GetSimpleHash(obj);
   if (IsSmi(hash)) return hash;
 
-  DCHECK(IsJSReceiver(obj));
+  // Make sure that we never cast internal objects to JSReceivers.
+  CHECK(IsJSReceiver(obj));
   Tagged<JSReceiver> receiver = JSReceiver::cast(obj);
   return receiver->GetIdentityHash();
 }

@@ -409,15 +409,15 @@ class V8_EXPORT_PRIVATE SmallOrderedHashTable<Derived>::BodyDescriptor final
   template <typename ObjectVisitor>
   static inline void IterateBody(Tagged<Map> map, Tagged<HeapObject> obj,
                                  int object_size, ObjectVisitor* v) {
-    Derived table = Derived::cast(obj);
+    Tagged<Derived> table = Derived::cast(obj);
     int start_offset = DataTableStartOffset();
-    int end_offset = table.GetBucketsStartOffset();
+    int end_offset = table->GetBucketsStartOffset();
     IteratePointers(obj, start_offset, end_offset, v);
   }
 
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> obj) {
-    Derived table = Derived::cast(obj);
-    return Derived::SizeFor(table.Capacity());
+    Tagged<Derived> table = Derived::cast(obj);
+    return Derived::SizeFor(table->Capacity());
   }
 };
 
@@ -941,7 +941,7 @@ class Code::BodyDescriptor final : public BodyDescriptorBase {
         obj->RawInstructionStreamField(kInstructionStreamOffset));
 #ifdef V8_CODE_POINTER_SANDBOXING
     v->VisitIndirectPointerTableEntry(
-        obj, obj->RawIndirectPointerField(kCodePointerTableEntryOffset));
+        obj, obj->RawIndirectPointerField(kSelfIndirectPointerOffset));
 #endif
   }
 
@@ -1015,6 +1015,7 @@ auto BodyDescriptorApply(InstanceType type, Args&&... args) {
   switch (type) {
     case EMBEDDER_DATA_ARRAY_TYPE:
       return CALL_APPLY(EmbedderDataArray);
+    case FIXED_ARRAY_TYPE:
     case OBJECT_BOILERPLATE_DESCRIPTION_TYPE:
     case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
     case HASH_TABLE_TYPE:
@@ -1029,6 +1030,8 @@ auto BodyDescriptorApply(InstanceType type, Args&&... args) {
     case REGISTERED_SYMBOL_TABLE_TYPE:
     case SCRIPT_CONTEXT_TABLE_TYPE:
       return CALL_APPLY(FixedArray);
+    case SLOPPY_ARGUMENTS_ELEMENTS_TYPE:
+      return CALL_APPLY(SloppyArgumentsElements);
     case EPHEMERON_HASH_TABLE_TYPE:
       return CALL_APPLY(EphemeronHashTable);
     case AWAIT_CONTEXT_TYPE:
@@ -1397,6 +1400,22 @@ class CallHandlerInfo::BodyDescriptor final : public BodyDescriptorBase {
 
   static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> object) {
     return kSize;
+  }
+};
+
+class FixedArray::BodyDescriptor final
+    : public SuffixRangeBodyDescriptor<HeapObject::kHeaderSize> {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return FixedArray::unchecked_cast(raw_object)->AllocatedSize();
+  }
+};
+
+class SloppyArgumentsElements::BodyDescriptor final
+    : public SuffixRangeBodyDescriptor<HeapObject::kHeaderSize> {
+ public:
+  static inline int SizeOf(Tagged<Map> map, Tagged<HeapObject> raw_object) {
+    return SloppyArgumentsElements::unchecked_cast(raw_object)->AllocatedSize();
   }
 };
 

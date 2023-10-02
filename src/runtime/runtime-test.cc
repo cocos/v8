@@ -1472,7 +1472,7 @@ RUNTIME_FUNCTION(Runtime_AbortJS) {
   Handle<String> message = args.at<String>(0);
   if (v8_flags.disable_abortjs) {
     base::OS::PrintError("[disabled] abort: %s\n", message->ToCString().get());
-    return Object();
+    return Tagged<Object>();
   }
   base::OS::PrintError("abort: %s\n", message->ToCString().get());
   isolate->PrintStack(stderr);
@@ -1878,14 +1878,6 @@ RUNTIME_FUNCTION(Runtime_ArrayBufferMaxByteLength) {
     return CrashUnlessFuzzing(isolate);
   }
   return *isolate->factory()->NewNumber(JSArrayBuffer::kMaxByteLength);
-}
-
-RUNTIME_FUNCTION(Runtime_TypedArrayMaxLength) {
-  HandleScope shs(isolate);
-  if (args.length() != 0) {
-    return CrashUnlessFuzzing(isolate);
-  }
-  return *isolate->factory()->NewNumber(JSTypedArray::kMaxLength);
 }
 
 RUNTIME_FUNCTION(Runtime_CompleteInobjectSlackTracking) {

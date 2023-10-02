@@ -147,12 +147,14 @@ ReadOnlyDeserializer::ReadOnlyDeserializer(Isolate* isolate,
                    can_rehash) {}
 
 void ReadOnlyDeserializer::DeserializeIntoIsolate() {
+  base::ElapsedTimer timer;
+  if (V8_UNLIKELY(v8_flags.profile_deserialization)) timer.Start();
   NestedTimedHistogramScope histogram_timer(
       isolate()->counters()->snapshot_deserialize_rospace());
   HandleScope scope(isolate());
-  ReadOnlyHeap* ro_heap = isolate()->read_only_heap();
 
   ReadOnlyHeapImageDeserializer::Deserialize(isolate(), source());
+  ReadOnlyHeap* ro_heap = isolate()->read_only_heap();
   ro_heap->read_only_space()->RepairFreeSpacesAfterDeserialization();
   PostProcessNewObjects();
 
@@ -166,6 +168,15 @@ void ReadOnlyDeserializer::DeserializeIntoIsolate() {
     isolate()->heap()->InitializeHashSeed();
     Rehash();
   }
+
+  if (V8_UNLIKELY(v8_flags.profile_deserialization)) {
+    // ATTENTION: The Memory.json benchmark greps for this exact output. Do not
+    // change it without also updating Memory.json.
+    const int bytes = source()->length();
+    const double ms = timer.Elapsed().InMillisecondsF();
+    PrintF("[Deserializing read-only space (%d bytes) took %0.3f ms]\n", bytes,
+           ms);
+  }
 }
 
 void NoExternalReferencesCallback() {
@@ -177,7 +188,8 @@ void NoExternalReferencesCallback() {
 
 class ObjectPostProcessor final {
  public:
-  explicit ObjectPostProcessor(Isolate* isolate) : isolate_(isolate) {}
+  explicit ObjectPostProcessor(Isolate* isolate)
+      : isolate_(isolate), embedded_data_(EmbeddedData::FromBlob(isolate_)) {}
 
   void Finalize() {
 #ifdef V8_ENABLE_SANDBOX
@@ -199,11 +211,12 @@ class ObjectPostProcessor final {
   V(Code)                         \
   V(SharedFunctionInfo)
 
-  void PostProcessIfNeeded(Tagged<HeapObject> o) {
-    const InstanceType itype = o->map(isolate_)->instance_type();
-#define V(TYPE)                               \
-  if (InstanceTypeChecker::Is##TYPE(itype)) { \
-    return PostProcess##TYPE(TYPE::cast(o));  \
+  V8_INLINE void PostProcessIfNeeded(Tagged<HeapObject> o,
+                                     InstanceType instance_type) {
+    DCHECK_EQ(o->map(isolate_)->instance_type(), instance_type);
+#define V(TYPE)                                       \
+  if (InstanceTypeChecker::Is##TYPE(instance_type)) { \
+    return PostProcess##TYPE(TYPE::cast(o));          \
   }
     POST_PROCESS_TYPE_LIST(V)
 #undef V
@@ -265,14 +278,12 @@ class ObjectPostProcessor final {
     if (USE_SIMULATOR_BOOL) o->init_callback_redirection(isolate_);
   }
   void PostProcessCode(Tagged<Code> o) {
-    o->init_instruction_start(isolate_, kNullAddress);
+    o->init_instruction_start(
+        isolate_, embedded_data_.InstructionStartOf(o->builtin_id()));
     // RO space only contains builtin Code objects which don't have an
     // attached InstructionStream.
     DCHECK(o->is_builtin());
     DCHECK(!o->has_instruction_stream());
-    o->SetInstructionStartForOffHeapBuiltin(
-        isolate_,
-        EmbeddedData::FromBlob(isolate_).InstructionStartOf(o->builtin_id()));
   }
   void PostProcessSharedFunctionInfo(Tagged<SharedFunctionInfo> o) {
     // Reset the id to avoid collisions - it must be unique in this isolate.
@@ -280,6 +291,7 @@ class ObjectPostProcessor final {
   }
 
   Isolate* const isolate_;
+  const EmbeddedData embedded_data_;
 
 #ifdef V8_ENABLE_SANDBOX
   struct SlotAndTag {
@@ -305,8 +317,8 @@ void ReadOnlyDeserializer::PostProcessNewObjects() {
   ObjectPostProcessor post_processor(isolate());
   ReadOnlyHeapObjectIterator it(isolate()->read_only_heap());
   for (Tagged<HeapObject> o = it.Next(); !o.is_null(); o = it.Next()) {
+    const InstanceType instance_type = o->map(cage_base)->instance_type();
     if (should_rehash()) {
-      const InstanceType instance_type = o->map(cage_base)->instance_type();
       if (InstanceTypeChecker::IsString(instance_type)) {
         Tagged<String> str = String::cast(o);
         str->set_raw_hash_field(Name::kEmptyHashField);
@@ -316,7 +328,7 @@ void ReadOnlyDeserializer::PostProcessNewObjects() {
       }
     }
 
-    post_processor.PostProcessIfNeeded(o);
+    post_processor.PostProcessIfNeeded(o, instance_type);
   }
   post_processor.Finalize();
 }

@@ -500,6 +500,7 @@ if (v8_enable_short_builtin_calls == "") {
 if (v8_enable_external_code_space == "") {
   v8_enable_external_code_space =
       v8_enable_pointer_compression &&
+      v8_enable_pointer_compression_shared_cage &&
       (v8_current_cpu == "x64" || v8_current_cpu == "arm64")
 }
 if (v8_enable_maglev == "") {
@@ -673,6 +674,9 @@ assert(!v8_enable_sandbox || v8_enable_pointer_compression_shared_cage,
 assert(!v8_enable_sandbox || v8_enable_external_code_space,
        "The sandbox requires the external code space")
 
+assert(!v8_enable_sandbox || !v8_enable_third_party_heap,
+       "The sandbox is incompatible with the third-party heap")
+
 assert(!v8_code_pointer_sandboxing || v8_enable_sandbox,
        "Code pointer sandboxing requires the sandbox")
 
@@ -682,6 +686,12 @@ assert(!v8_expose_memory_corruption_api || v8_enable_sandbox,
 assert(
     !v8_enable_pointer_compression_shared_cage || v8_enable_pointer_compression,
     "Can't share a pointer compression cage if pointers aren't compressed")
+
+assert(
+    !v8_enable_pointer_compression ||
+        v8_enable_pointer_compression_shared_cage ||
+        !v8_enable_external_code_space,
+    "Multi-cage pointer compression mode is not compatible with external code space")
 
 assert(
     !v8_enable_pointer_compression_shared_cage || v8_current_cpu == "x64" ||
@@ -762,7 +772,7 @@ config("internal_config") {
 config("v8_tracing_config") {
   if (v8_use_perfetto) {
     include_dirs = [
-      "third_party/perfetto/include",
+      "//third_party/perfetto/include",
       "$root_gen_dir/third_party/perfetto",
       "$root_gen_dir/third_party/perfetto/build_config",
     ]
@@ -1835,6 +1845,7 @@ torque_files = [
   "src/builtins/array-findlast.tq",
   "src/builtins/array-findlastindex.tq",
   "src/builtins/array-foreach.tq",
+  "src/builtins/array-from-async.tq",
   "src/builtins/array-from.tq",
   "src/builtins/array-isarray.tq",
   "src/builtins/array-join.tq",
@@ -2018,6 +2029,7 @@ torque_files = [
   "src/objects/name.tq",
   "src/objects/oddball.tq",
   "src/objects/hole.tq",
+  "src/objects/trusted-object.tq",
   "src/objects/ordered-hash-table.tq",
   "src/objects/primitive-heap-object.tq",
   "src/objects/promise.tq",
@@ -3325,6 +3337,8 @@ v8_header_set("v8_internal_headers") {
     "src/compiler/turboshaft/late-escape-analysis-reducer.h",
     "src/compiler/turboshaft/late-load-elimination-reducer.h",
     "src/compiler/turboshaft/layered-hash-map.h",
+    "src/compiler/turboshaft/loop-unrolling-phase.h",
+    "src/compiler/turboshaft/loop-unrolling-reducer.h",
     "src/compiler/turboshaft/machine-lowering-phase.h",
     "src/compiler/turboshaft/machine-lowering-reducer.h",
     "src/compiler/turboshaft/machine-optimization-reducer.h",
@@ -3345,7 +3359,9 @@ v8_header_set("v8_internal_headers") {
     "src/compiler/turboshaft/select-lowering-reducer.h",
     "src/compiler/turboshaft/sidetable.h",
     "src/compiler/turboshaft/simplify-tf-loops.h",
+    "src/compiler/turboshaft/snapshot-table-opindex.h",
     "src/compiler/turboshaft/snapshot-table.h",
+    "src/compiler/turboshaft/stack-check-reducer.h",
     "src/compiler/turboshaft/store-store-elimination-phase.h",
     "src/compiler/turboshaft/store-store-elimination-reducer.h",
     "src/compiler/turboshaft/structural-optimization-reducer.h",
@@ -3364,6 +3380,7 @@ v8_header_set("v8_internal_headers") {
     "src/compiler/turboshaft/utils.h",
     "src/compiler/turboshaft/value-numbering-reducer.h",
     "src/compiler/turboshaft/variable-reducer.h",
+    "src/compiler/turboshaft/wasm-dead-code-elimination-phase.h",
     "src/compiler/type-cache.h",
     "src/compiler/type-narrowing-reducer.h",
     "src/compiler/typed-optimization.h",
@@ -3516,6 +3533,8 @@ v8_header_set("v8_internal_headers") {
     "src/heap/local-factory.h",
     "src/heap/local-heap-inl.h",
     "src/heap/local-heap.h",
+    "src/heap/main-allocator-inl.h",
+    "src/heap/main-allocator.h",
     "src/heap/mark-compact-inl.h",
     "src/heap/mark-compact.h",
     "src/heap/mark-sweep-utilities.h",
@@ -3837,6 +3856,8 @@ v8_header_set("v8_internal_headers") {
     "src/objects/torque-defined-classes.h",
     "src/objects/transitions-inl.h",
     "src/objects/transitions.h",
+    "src/objects/trusted-object-inl.h",
+    "src/objects/trusted-object.h",
     "src/objects/turbofan-types-inl.h",
     "src/objects/turbofan-types.h",
     "src/objects/turboshaft-types-inl.h",
@@ -3924,6 +3945,8 @@ v8_header_set("v8_internal_headers") {
     "src/sandbox/external-pointer-table.h",
     "src/sandbox/external-pointer.h",
     "src/sandbox/indirect-pointer-inl.h",
+    "src/sandbox/indirect-pointer-table-inl.h",
+    "src/sandbox/indirect-pointer-table.h",
     "src/sandbox/indirect-pointer.h",
     "src/sandbox/sandbox.h",
     "src/sandbox/sandboxed-pointer-inl.h",
@@ -4064,6 +4087,8 @@ v8_header_set("v8_internal_headers") {
       "src/compiler/int64-lowering.h",
       "src/compiler/turboshaft/int64-lowering-phase.h",
       "src/compiler/turboshaft/int64-lowering-reducer.h",
+      "src/compiler/turboshaft/wasm-gc-optimize-phase.h",
+      "src/compiler/turboshaft/wasm-gc-type-reducer.h",
       "src/compiler/turboshaft/wasm-js-lowering-reducer.h",
       "src/compiler/turboshaft/wasm-lowering-reducer.h",
       "src/compiler/turboshaft/wasm-optimize-phase.h",
@@ -4123,6 +4148,7 @@ v8_header_set("v8_internal_headers") {
       "src/wasm/turboshaft-graph-interface.h",
       "src/wasm/value-type.h",
       "src/wasm/wasm-arguments.h",
+      "src/wasm/wasm-builtin-list.h",
       "src/wasm/wasm-code-manager.h",
       "src/wasm/wasm-debug.h",
       "src/wasm/wasm-disassembler-impl.h",
@@ -4731,6 +4757,8 @@ if (v8_enable_webassembly) {
   v8_compiler_sources += [
     "src/compiler/int64-lowering.cc",
     "src/compiler/turboshaft/int64-lowering-phase.cc",
+    "src/compiler/turboshaft/wasm-gc-optimize-phase.cc",
+    "src/compiler/turboshaft/wasm-gc-type-reducer.cc",
     "src/compiler/turboshaft/wasm-optimize-phase.cc",
     "src/compiler/turboshaft/wasm-turboshaft-compiler.cc",
     "src/compiler/wasm-address-reassociation.cc",
@@ -4840,6 +4868,8 @@ v8_source_set("v8_turboshaft") {
     "src/compiler/turboshaft/instruction-selection-phase.cc",
     "src/compiler/turboshaft/late-escape-analysis-reducer.cc",
     "src/compiler/turboshaft/late-load-elimination-reducer.cc",
+    "src/compiler/turboshaft/loop-unrolling-phase.cc",
+    "src/compiler/turboshaft/loop-unrolling-reducer.cc",
     "src/compiler/turboshaft/machine-lowering-phase.cc",
     "src/compiler/turboshaft/memory-optimization-reducer.cc",
     "src/compiler/turboshaft/operations.cc",
@@ -5075,6 +5105,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/heap/cppgc-js/unified-heap-marking-verifier.cc",
     "src/heap/cppgc-js/unified-heap-marking-visitor.cc",
     "src/heap/ephemeron-remembered-set.cc",
+    "src/heap/evacuation-allocator.cc",
     "src/heap/evacuation-verifier.cc",
     "src/heap/factory-base.cc",
     "src/heap/factory.cc",
@@ -5095,6 +5126,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/heap/large-spaces.cc",
     "src/heap/local-factory.cc",
     "src/heap/local-heap.cc",
+    "src/heap/main-allocator.cc",
     "src/heap/mark-compact.cc",
     "src/heap/mark-sweep-utilities.cc",
     "src/heap/marking-barrier.cc",
@@ -5320,6 +5352,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/runtime/runtime.cc",
     "src/sandbox/code-pointer-table.cc",
     "src/sandbox/external-pointer-table.cc",
+    "src/sandbox/indirect-pointer-table.cc",
     "src/sandbox/sandbox.cc",
     "src/sandbox/testing.cc",
     "src/snapshot/code-serializer.cc",
@@ -5420,6 +5453,7 @@ v8_source_set("v8_base_without_compiler") {
       "src/asmjs/asm-parser.cc",
       "src/asmjs/asm-scanner.cc",
       "src/asmjs/asm-types.cc",
+      "src/compiler/turboshaft/wasm-dead-code-elimination-phase.cc",
       "src/debug/debug-wasm-objects.cc",
       "src/runtime/runtime-test-wasm.cc",
       "src/runtime/runtime-wasm.cc",
@@ -6384,6 +6418,7 @@ v8_header_set("v8_heap_base_headers") {
     "src/heap/base/basic-slot-set.h",
     "src/heap/base/bytes.h",
     "src/heap/base/incremental-marking-schedule.h",
+    "src/heap/base/memory-tagging.h",
     "src/heap/base/stack.h",
     "src/heap/base/worklist.h",
   ]
@@ -6397,6 +6432,7 @@ v8_source_set("v8_heap_base") {
   sources = [
     "src/heap/base/active-system-pages.cc",
     "src/heap/base/incremental-marking-schedule.cc",
+    "src/heap/base/memory-tagging.cc",
     "src/heap/base/stack.cc",
     "src/heap/base/worklist.cc",
   ]
@@ -6432,6 +6468,8 @@ v8_source_set("v8_heap_base") {
   }
 
   configs = [ ":internal_config" ]
+
+  deps = [ ":v8_config_headers" ]
 
   public_deps = [
     ":v8_heap_base_headers",

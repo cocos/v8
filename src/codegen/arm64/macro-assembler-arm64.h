@@ -1002,6 +1002,9 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void LoadMap(Register dst, Register object);
   void LoadCompressedMap(Register dst, Register object);
 
+  void LoadFeedbackVector(Register dst, Register closure, Register scratch,
+                          Label* fbv_undef);
+
   inline void Fmov(VRegister fd, VRegister fn);
   inline void Fmov(VRegister fd, Register rn);
   // Provide explicit double and float interfaces for FP immediate moves, rather
@@ -1589,10 +1592,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void StoreMaybeIndirectPointerField(Register value,
                                       MemOperand dst_field_operand);
 
-  // Laod a pointer to a code entrypoint from the heap.
-  // When the sandbox is enabled the pointer is loaded indirectly via the code
-  // pointer table, otherwise it is loaded direclty as a raw pointer.
-  void LoadCodeEntrypointField(Register destination, MemOperand field_operand);
+  // Load the pointer to a Code's entrypoint via an indirect pointer to the
+  // Code object.
+  // Only available when the sandbox is enabled.
+  void LoadCodeEntrypointViaIndirectPointer(Register destination,
+                                            MemOperand field_operand);
 
   // Instruction set functions ------------------------------------------------
   // Logical macros.
@@ -2475,7 +2479,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               Register function_address,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int stack_space, MemOperand* stack_space_operand,
-                              MemOperand return_value_operand);
+                              MemOperand return_value_operand, Label* done);
 
 }  // namespace internal
 }  // namespace v8

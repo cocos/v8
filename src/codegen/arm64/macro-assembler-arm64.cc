@@ -24,10 +24,6 @@
 #include "src/runtime/runtime.h"
 #include "src/snapshot/snapshot.h"
 
-#if V8_ENABLE_WEBASSEMBLY
-#include "src/wasm/wasm-code-manager.h"
-#endif  // V8_ENABLE_WEBASSEMBLY
-
 // Satisfy cpplint check, but don't include platform-specific header. It is
 // included recursively via macro-assembler.h.
 #if 0
@@ -2447,8 +2443,13 @@ void MacroAssembler::TailCallBuiltin(Builtin builtin, Condition cond) {
 void MacroAssembler::LoadCodeInstructionStart(Register destination,
                                               Register code_object) {
   ASM_CODE_COMMENT(this);
-  LoadCodeEntrypointField(
-      destination, FieldMemOperand(code_object, Code::kInstructionStartOffset));
+#ifdef V8_CODE_POINTER_SANDBOXING
+  LoadCodeEntrypointViaIndirectPointer(
+      destination,
+      FieldMemOperand(code_object, Code::kSelfIndirectPointerOffset));
+#else
+  Ldr(destination, FieldMemOperand(code_object, Code::kInstructionStartOffset));
+#endif
 }
 
 void MacroAssembler::CallCodeObject(Register code_object) {
@@ -2476,7 +2477,7 @@ void MacroAssembler::CallJSFunction(Register function_object) {
   // When the sandbox is enabled, we can directly fetch the entrypoint pointer
   // from the code pointer table instead of going through the Code object. In
   // this way, we avoid one memory load on this code path.
-  LoadCodeEntrypointField(
+  LoadCodeEntrypointViaIndirectPointer(
       code, FieldMemOperand(function_object, JSFunction::kCodeOffset));
   Call(code);
 #else
@@ -2493,7 +2494,7 @@ void MacroAssembler::JumpJSFunction(Register function_object,
   // When the sandbox is enabled, we can directly fetch the entrypoint pointer
   // from the code pointer table instead of going through the Code object. In
   // this way, we avoid one memory load on this code path.
-  LoadCodeEntrypointField(
+  LoadCodeEntrypointViaIndirectPointer(
       code, FieldMemOperand(function_object, JSFunction::kCodeOffset));
   DCHECK_EQ(jump_mode, JumpMode::kJump);
   // We jump through x17 here because for Branch Identification (BTI) we use
@@ -2919,7 +2920,7 @@ void MacroAssembler::TruncateDoubleToI(Isolate* isolate, Zone* zone,
   // DoubleToI preserves any registers it needs to clobber.
 #if V8_ENABLE_WEBASSEMBLY
   if (stub_mode == StubCallMode::kCallWasmRuntimeStub) {
-    Call(wasm::WasmCode::kDoubleToI, RelocInfo::WASM_STUB_CALL);
+    Call(static_cast<Address>(Builtin::kDoubleToI), RelocInfo::WASM_STUB_CALL);
 #else
   // For balance.
   if (false) {
@@ -3195,6 +3196,28 @@ void MacroAssembler::LoadCompressedMap(Register dst, Register object) {
 void MacroAssembler::LoadMap(Register dst, Register object) {
   ASM_CODE_COMMENT(this);
   LoadTaggedField(dst, FieldMemOperand(object, HeapObject::kMapOffset));
+}
+
+void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
+                                        Register scratch, Label* fbv_undef) {
+  Label done;
+
+  // Load the feedback vector from the closure.
+  LoadTaggedField(dst,
+                  FieldMemOperand(closure, JSFunction::kFeedbackCellOffset));
+  LoadTaggedField(dst, FieldMemOperand(dst, FeedbackCell::kValueOffset));
+
+  // Check if feedback vector is valid.
+  LoadTaggedField(scratch, FieldMemOperand(dst, HeapObject::kMapOffset));
+  Ldrh(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
+  Cmp(scratch, FEEDBACK_VECTOR_TYPE);
+  B(eq, &done);
+
+  // Not valid, load undefined.
+  LoadRoot(dst, RootIndex::kUndefinedValue);
+  B(fbv_undef);
+
+  Bind(&done);
 }
 
 // Sets condition flags based on comparison, and returns type in type_reg.
@@ -3533,18 +3556,22 @@ void MacroAssembler::LoadIndirectPointerField(Register destination,
                  Immediate(kCodePointerTableEntryCodeObjectOffset)));
   Orr(destination, destination, Immediate(kHeapObjectTag));
 #else
-  Ldr(destination, field_operand);
+  UNREACHABLE();
 #endif  // V8_CODE_POINTER_SANDBOXING
 }
 
 void MacroAssembler::StoreIndirectPointerField(Register value,
                                                MemOperand dst_field_operand) {
+#ifdef V8_CODE_POINTER_SANDBOXING
   DCHECK(V8_CODE_POINTER_SANDBOXING_BOOL);
   UseScratchRegisterScope temps(this);
   Register scratch = temps.AcquireX();
-  static_assert(kAllIndirectPointerObjectsAreCode);
-  Ldr(scratch.W(), FieldMemOperand(value, Code::kCodePointerTableEntryOffset));
+  Ldr(scratch.W(),
+      FieldMemOperand(value, ExposedTrustedObject::kSelfIndirectPointerOffset));
   Str(scratch.W(), dst_field_operand);
+#else
+  UNREACHABLE();
+#endif
 }
 
 void MacroAssembler::StoreMaybeIndirectPointerField(
@@ -3556,8 +3583,8 @@ void MacroAssembler::StoreMaybeIndirectPointerField(
 #endif
 }
 
-void MacroAssembler::LoadCodeEntrypointField(Register destination,
-                                             MemOperand field_operand) {
+void MacroAssembler::LoadCodeEntrypointViaIndirectPointer(
+    Register destination, MemOperand field_operand) {
   ASM_CODE_COMMENT(this);
 #ifdef V8_CODE_POINTER_SANDBOXING
   UseScratchRegisterScope temps(this);
@@ -3569,7 +3596,7 @@ void MacroAssembler::LoadCodeEntrypointField(Register destination,
   Mov(destination, Operand(destination, LSL, kCodePointerTableEntrySizeLog2));
   Ldr(destination, MemOperand(table, destination));
 #else
-  Ldr(destination, field_operand);
+  UNREACHABLE();
 #endif  // V8_CODE_POINTER_SANDBOXING
 }
 
@@ -3637,7 +3664,8 @@ void MacroAssembler::CallRecordWriteStub(Register object, Register slot_address,
     DCHECK_EQ(WriteBarrierDescriptor::SlotAddressRegister(), slot_address);
 #if V8_ENABLE_WEBASSEMBLY
   if (mode == StubCallMode::kCallWasmRuntimeStub) {
-    auto wasm_target = wasm::WasmCode::GetRecordWriteStub(fp_mode);
+    auto wasm_target =
+        static_cast<Address>(wasm::WasmCode::GetRecordWriteBuiltin(fp_mode));
     Call(wasm_target, RelocInfo::WASM_STUB_CALL);
 #else
   if (false) {
@@ -4231,7 +4259,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               Register function_address,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int stack_space, MemOperand* stack_space_operand,
-                              MemOperand return_value_operand) {
+                              MemOperand return_value_operand, Label* done) {
   ASM_CODE_COMMENT(masm);
   ASM_LOCATION("CallApiFunctionAndReturn");
 
@@ -4268,6 +4296,11 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                      scratch, scratch2, prev_next_address_reg, prev_limit_reg));
   DCHECK(!AreAliased(thunk_arg,  // incoming parameters
                      scratch, scratch2, prev_next_address_reg, prev_limit_reg));
+
+  // Explicitly include x16/x17 to let StoreReturnAddressAndCall() use them.
+  UseScratchRegisterScope fix_temps(masm);
+  fix_temps.Include(x16, x17);
+
   {
     ASM_CODE_COMMENT_STRING(masm,
                             "Allocate HandleScope in callee-save registers.");
@@ -4363,8 +4396,11 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     // {stack_space_operand} was loaded into {stack_space_reg} above.
     __ DropArguments(stack_space_reg);
   }
-
-  __ Ret();
+  if (done) {
+    __ B(done);
+  } else {
+    __ Ret();
+  }
 
   if (with_profiling) {
     ASM_CODE_COMMENT_STRING(masm, "Call the api function via thunk wrapper.");

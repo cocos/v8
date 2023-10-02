@@ -81,6 +81,11 @@ class V8_EXPORT_PRIVATE LargeObjectSpace : public Space {
 
   std::unique_ptr<ObjectIterator> GetObjectIterator(Heap* heap) override;
 
+  void AddAllocationObserver(AllocationObserver* observer) override;
+  void RemoveAllocationObserver(AllocationObserver* observer) override;
+  void PauseAllocationObservers() override;
+  void ResumeAllocationObservers() override;
+
 #ifdef VERIFY_HEAP
   void Verify(Isolate* isolate, SpaceVerificationVisitor* visitor) const final;
 #endif
@@ -138,7 +143,7 @@ class V8_EXPORT_PRIVATE LargeObjectSpace : public Space {
 
 class OldLargeObjectSpace : public LargeObjectSpace {
  public:
-  explicit OldLargeObjectSpace(Heap* heap);
+  V8_EXPORT_PRIVATE explicit OldLargeObjectSpace(Heap* heap);
 
   V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT AllocationResult
   AllocateRaw(int object_size);
@@ -159,6 +164,15 @@ class OldLargeObjectSpace : public LargeObjectSpace {
 class SharedLargeObjectSpace : public OldLargeObjectSpace {
  public:
   explicit SharedLargeObjectSpace(Heap* heap);
+
+  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT AllocationResult
+  AllocateRawBackground(LocalHeap* local_heap, int object_size);
+};
+
+// Similar to the TrustedSpace, but for large objects.
+class TrustedLargeObjectSpace : public OldLargeObjectSpace {
+ public:
+  explicit TrustedLargeObjectSpace(Heap* heap);
 
   V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT AllocationResult
   AllocateRawBackground(LocalHeap* local_heap, int object_size);

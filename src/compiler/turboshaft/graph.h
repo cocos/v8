@@ -268,6 +268,38 @@ class RandomAccessStackDominatorNode
   Derived* jmp_ = nullptr;
 };
 
+// A simple iterator to walk over the predecessors of a block. Note that the
+// iteration order is reversed.
+class PredecessorIterator {
+ public:
+  explicit PredecessorIterator(Block* block) : current_(block) {}
+
+  PredecessorIterator& operator++();
+  constexpr bool operator==(const PredecessorIterator& other) const {
+    return current_ == other.current_;
+  }
+  constexpr bool operator!=(const PredecessorIterator& other) const {
+    return !(*this == other);
+  }
+
+  Block* operator*() const { return current_; }
+
+ private:
+  Block* current_;
+};
+
+// An iterable wrapper for the predecessors of a block.
+class NeighboringPredecessorIterable {
+ public:
+  explicit NeighboringPredecessorIterable(Block* begin) : begin_(begin) {}
+
+  PredecessorIterator begin() const { return PredecessorIterator(begin_); }
+  PredecessorIterator end() const { return PredecessorIterator(nullptr); }
+
+ private:
+  Block* begin_;
+};
+
 // A basic block
 class Block : public RandomAccessStackDominatorNode<Block> {
  public:
@@ -297,6 +329,12 @@ class Block : public RandomAccessStackDominatorNode<Block> {
     }
     std::reverse(result.begin(), result.end());
     return result;
+  }
+
+  // Returns an iterable object (defining begin() and end()) to iterate over the
+  // block's predecessors.
+  NeighboringPredecessorIterable PredecessorsIterable() const {
+    return NeighboringPredecessorIterable(last_predecessor_);
   }
 
   // TODO(dmercadier): we should store predecessor count in the Blocks directly
@@ -347,16 +385,6 @@ class Block : public RandomAccessStackDominatorNode<Block> {
   bool HasPredecessors() const { return last_predecessor_ != nullptr; }
   void ResetLastPredecessor() { last_predecessor_ = nullptr; }
 
-  void SetMappingToNextGraph(Block* next_graph_block) {
-    DCHECK_NULL(next_graph_mapping_);
-    DCHECK_NOT_NULL(next_graph_block);
-    next_graph_mapping_ = next_graph_block;
-    next_graph_block->SetOrigin(this);
-  }
-  Block* MapToNextGraph() const {
-    DCHECK_NOT_NULL(next_graph_mapping_);
-    return next_graph_mapping_;
-  }
   // The block from the previous graph which produced the current block. This
   // has to be updated to be the last block that contributed operations to the
   // current block to ensure that phi nodes are created correctly.git cl
@@ -371,18 +399,6 @@ class Block : public RandomAccessStackDominatorNode<Block> {
   const Block* OriginForBlockEnd() const {
     DCHECK(IsBound());
     return origin_;
-  }
-  // The block from the input graph that corresponds to the current block as a
-  // branch destination. Such a block might not exist, and this function uses a
-  // trick to compute such a block in almost all cases, but might rarely fail
-  // and return `nullptr` instead.
-  const Block* OriginForBlockStart() const {
-    // Check that `origin_` is still valid as a block start and was not changed
-    // to a semantically different block when inlining blocks.
-    if (origin_ && origin_->MapToNextGraph() == this) {
-      return origin_;
-    }
-    return nullptr;
   }
 
   bool IsComplete() const { return end_.valid(); }
@@ -471,7 +487,6 @@ class Block : public RandomAccessStackDominatorNode<Block> {
   Block* last_predecessor_ = nullptr;
   Block* neighboring_predecessor_ = nullptr;
   const Block* origin_ = nullptr;
-  Block* next_graph_mapping_ = nullptr;
   // The {custom_data_} field can be used by algorithms to temporarily store
   // block-specific data. This field is not preserved when constructing a new
   // output graph and algorithms cannot rely on this field being properly reset
@@ -481,9 +496,18 @@ class Block : public RandomAccessStackDominatorNode<Block> {
   CustomDataKind custom_data_kind_for_debug_check_ = CustomDataKind::kUnset;
   size_t graph_generation_ = 0;
 #endif
+
+  template <class Assembler>
+  friend class GraphVisitor;
 };
 
 std::ostream& operator<<(std::ostream& os, const Block* b);
+
+inline PredecessorIterator& PredecessorIterator::operator++() {
+  DCHECK_NE(current_, nullptr);
+  current_ = current_->NeighboringPredecessor();
+  return *this;
+}
 
 class Graph {
  public:
@@ -628,15 +652,29 @@ class Graph {
     IncrementInputUses(*new_op);
   }
 
-  V8_INLINE Block* NewLoopHeader() {
-    return NewBlock(Block::Kind::kLoopHeader);
+  V8_INLINE Block* NewLoopHeader(const Block* origin = nullptr) {
+    return NewBlock(Block::Kind::kLoopHeader, origin);
   }
-  V8_INLINE Block* NewBlock() { return NewBlock(Block::Kind::kMerge); }
-  V8_INLINE Block* NewMappedBlock(Block* origin) {
-    Block* new_block = NewBlock(origin->IsLoop() ? Block::Kind::kLoopHeader
-                                                 : Block::Kind::kMerge);
-    origin->SetMappingToNextGraph(new_block);
-    return new_block;
+  V8_INLINE Block* NewBlock(const Block* origin = nullptr) {
+    return NewBlock(Block::Kind::kMerge, origin);
+  }
+
+  V8_INLINE Block* NewBlock(Block::Kind kind, const Block* origin = nullptr) {
+    if (V8_UNLIKELY(next_block_ == all_blocks_.size())) {
+      constexpr size_t new_block_count = 64;
+      base::Vector<Block> blocks =
+          graph_zone_->NewVector<Block>(new_block_count, Block(kind));
+      for (size_t i = 0; i < new_block_count; ++i) {
+        all_blocks_.push_back(&blocks[i]);
+      }
+    }
+    Block* result = all_blocks_[next_block_++];
+    *result = Block(kind);
+#ifdef DEBUG
+    result->graph_generation_ = generation_;
+#endif
+    result->SetOrigin(origin);
+    return result;
   }
 
   V8_INLINE bool Add(Block* block) {
@@ -923,23 +961,6 @@ class Graph {
     }
   }
 
-  V8_INLINE Block* NewBlock(Block::Kind kind) {
-    if (V8_UNLIKELY(next_block_ == all_blocks_.size())) {
-      constexpr size_t new_block_count = 64;
-      base::Vector<Block> blocks =
-          graph_zone_->NewVector<Block>(new_block_count, Block(kind));
-      for (size_t i = 0; i < new_block_count; ++i) {
-        all_blocks_.push_back(&blocks[i]);
-      }
-    }
-    Block* result = all_blocks_[next_block_++];
-    *result = Block(kind);
-#ifdef DEBUG
-    result->graph_generation_ = generation_;
-#endif
-    return result;
-  }
-
   OperationBuffer operations_;
   ZoneVector<Block*> bound_blocks_;
   ZoneVector<Block*> all_blocks_;
@@ -985,34 +1006,15 @@ V8_INLINE const Operation& Block::LastOperation(const Graph& graph) const {
 }
 
 V8_INLINE bool Block::HasPhis(const Graph& graph) const {
+  // TODO(dmercadier): consider re-introducing the invariant that Phis are
+  // always at the begining of a block to speed up such functions. Currently,
+  // in practice, Phis do not appear after the first non-FrameState non-Constant
+  // operation, but this is not enforced.
   DCHECK_EQ(graph_generation_, graph.generation());
-#ifdef DEBUG
-  // Verify that only Phis/FrameStates are found, then all other Phis/
-  // FrameStateOps in the block come consecutively.
-  bool starts_with_phi = false;
-  bool finished_phis = false;
   for (const auto& op : graph.operations(*this)) {
-    if (op.Is<PhiOp>()) {
-      DCHECK(!finished_phis);
-      starts_with_phi = true;
-    }
-    if (!op.Is<PhiOp>() && !op.Is<FrameStateOp>()) {
-      finished_phis = true;
-    }
-  }
-  return starts_with_phi;
-#else   // DEBUG
-  for (const auto& op : graph.operations(*this)) {
-    if (op.Is<PhiOp>()) {
-      return true;
-    } else if (op.Is<FrameStateOp>()) {
-      continue;
-    } else {
-      return false;
-    }
+    if (op.Is<PhiOp>()) return true;
   }
   return false;
-#endif  // DEBUG
 }
 
 struct PrintAsBlockHeader {
@@ -1130,5 +1132,13 @@ inline Derived* RandomAccessStackDominatorNode<Derived>::GetCommonDominator(
 }
 
 }  // namespace v8::internal::compiler::turboshaft
+
+// MSVC needs this definition to know how to deal with the PredecessorIterator.
+template <>
+class std::iterator_traits<
+    v8::internal::compiler::turboshaft::PredecessorIterator> {
+ public:
+  using iterator_category = std::forward_iterator_tag;
+};
 
 #endif  // V8_COMPILER_TURBOSHAFT_GRAPH_H_

@@ -29,7 +29,6 @@
 #include "src/objects/smi.h"
 
 #if V8_ENABLE_WEBASSEMBLY
-#include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
 #endif  // V8_ENABLE_WEBASSEMBLY
 
@@ -254,10 +253,11 @@ class OutOfLineTruncateDoubleToI final : public OutOfLineCode {
     __ Movsd(MemOperand(rsp, 0), input_);
 #if V8_ENABLE_WEBASSEMBLY
     if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
-      // A direct call to a wasm runtime stub defined in this module.
-      // Just encode the stub index. This will be patched when the code
-      // is added to the native module and copied into wasm code space.
-      __ near_call(wasm::WasmCode::kDoubleToI, RelocInfo::WASM_STUB_CALL);
+      // A direct call to a builtin. Just encode the builtin index. This will be
+      // patched when the code is added to the native module and copied into
+      // wasm code space.
+      __ near_call(static_cast<intptr_t>(Builtin::kDoubleToI),
+                   RelocInfo::WASM_STUB_CALL);
 #else
     // For balance.
     if (false) {
@@ -637,10 +637,10 @@ Register GetTSANValueRegister(MacroAssembler* masm, Register value,
   } else if (rep == MachineRepresentation::kIndirectPointer) {
     // Indirect pointer fields contain an index to a pointer table entry, which
     // is obtained from the referenced object.
-    static_assert(kAllIndirectPointerObjectsAreCode);
     Register value_reg = i.TempRegister(1);
-    masm->movl(value_reg,
-               FieldOperand(value, Code::kCodePointerTableEntryOffset));
+    masm->movl(
+        value_reg,
+        FieldOperand(value, ExposedTrustedObject::kSelfIndirectPointerOffset));
     return value_reg;
   }
   return value;
@@ -663,9 +663,9 @@ Register GetTSANValueRegister<std::memory_order_relaxed>(
   } else if (rep == MachineRepresentation::kIndirectPointer) {
     // Indirect pointer fields contain an index to a pointer table entry, which
     // is obtained from the referenced object.
-    static_assert(kAllIndirectPointerObjectsAreCode);
     masm->movl(value_reg,
-               FieldOperand(value_reg, Code::kCodePointerTableEntryOffset));
+               FieldOperand(value_reg,
+                            ExposedTrustedObject::kSelfIndirectPointerOffset));
   }
   return value_reg;
 }
@@ -1548,6 +1548,16 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     case kArchFramePointer:
       __ movq(i.OutputRegister(), rbp);
+      break;
+    case kArchStackPointer:
+      __ movq(i.OutputRegister(), rsp);
+      break;
+    case kArchSetStackPointer:
+      if (instr->InputAt(0)->IsRegister()) {
+        __ movq(rsp, i.InputRegister(0));
+      } else {
+        __ movq(rsp, i.InputOperand(0));
+      }
       break;
     case kArchParentFramePointer:
       if (frame_access_state()->has_frame()) {
@@ -6595,6 +6605,13 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       SetupSimd256ImmediateInRegister(masm(), imm, dst, kScratchDoubleReg);
       break;
     }
+    case kX64ExtractF128: {
+      CpuFeatureScope avx_scope(masm(), AVX);
+      uint8_t lane = i.InputInt8(1);
+      __ vextractf128(i.OutputSimd128Register(), i.InputSimd256Register(0),
+                      lane);
+      break;
+    }
   }
   return kSuccess;
 }  // NOLadability/fn_size)
@@ -6980,7 +6997,7 @@ void CodeGenerator::AssembleConstructFrame() {
         __ j(above_equal, &done, Label::kNear);
       }
 
-      __ near_call(wasm::WasmCode::kWasmStackOverflow,
+      __ near_call(static_cast<intptr_t>(Builtin::kWasmStackOverflow),
                    RelocInfo::WASM_STUB_CALL);
       // The call does not return, hence we can ignore any references and just
       // define an empty safepoint.

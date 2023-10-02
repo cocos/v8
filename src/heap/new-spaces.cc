@@ -354,11 +354,13 @@ void SemiSpace::AddRangeToActiveSystemPages(Address start, Address end) {
 }
 
 void SemiSpace::set_age_mark(Address mark) {
-  DCHECK_EQ(Page::FromAllocationAreaAddress(mark)->owner(), this);
   age_mark_ = mark;
+  Page* age_mark_page = Page::FromAllocationAreaAddress(mark);
+  DCHECK_EQ(age_mark_page->owner(), this);
   // Mark all pages up to the one containing mark.
-  for (Page* p : PageRange(space_start(), mark)) {
+  for (Page* p : *this) {
     p->SetFlag(MemoryChunk::NEW_SPACE_BELOW_AGE_MARK);
+    if (p == age_mark_page) break;
   }
 }
 
@@ -448,33 +450,8 @@ void SemiSpace::AssertValidRange(Address start, Address end) {
 // NewSpace implementation
 
 NewSpace::NewSpace(Heap* heap, LinearAllocationArea& allocation_info)
-    : SpaceWithLinearArea(heap, NEW_SPACE, nullptr, allocation_counter_,
-                          allocation_info, linear_area_original_data_) {}
-
-void NewSpace::MaybeFreeUnusedLab(LinearAllocationArea info) {
-  if (allocation_info_.MergeIfAdjacent(info)) {
-    linear_area_original_data_.set_original_top_release(allocation_info_.top());
-  }
-
-#if DEBUG
-  VerifyTop();
-#endif
-}
-
-#if DEBUG
-void NewSpace::VerifyTop() const {
-  SpaceWithLinearArea::VerifyTop();
-
-  // Ensure that original_top_ always >= LAB start. The delta between start_
-  // and top_ is still to be processed by allocation observers.
-  DCHECK_GE(linear_area_original_data_.get_original_top_acquire(),
-            allocation_info_.start());
-
-  // Ensure that limit() is <= original_limit_.
-  DCHECK_LE(allocation_info_.limit(),
-            linear_area_original_data_.get_original_limit_relaxed());
-}
-#endif  // DEBUG
+    : SpaceWithLinearArea(heap, NEW_SPACE, nullptr, CompactionSpaceKind::kNone,
+                          allocation_info) {}
 
 void NewSpace::PromotePageToOldSpace(Page* page) {
   DCHECK(!page->IsFlagSet(Page::PAGE_NEW_OLD_PROMOTION));
@@ -509,7 +486,7 @@ SemiSpaceNewSpace::SemiSpaceNewSpace(Heap* heap,
 SemiSpaceNewSpace::~SemiSpaceNewSpace() {
   // Tears down the space.  Heap memory was not allocated by the space, so it
   // is not deallocated here.
-  allocation_info_.Reset(kNullAddress, kNullAddress);
+  allocator_->allocation_info().Reset(kNullAddress, kNullAddress);
 
   to_space_.TearDown();
   from_space_.TearDown();
@@ -530,7 +507,7 @@ void SemiSpaceNewSpace::Grow() {
       to_space_.ShrinkTo(from_space_.target_capacity());
     }
   }
-  DCHECK_SEMISPACE_ALLOCATION_INFO(allocation_info_, to_space_);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
 }
 
 void SemiSpaceNewSpace::Shrink() {
@@ -542,14 +519,14 @@ void SemiSpaceNewSpace::Shrink() {
     if (from_space_.IsCommitted()) from_space_.Reset();
     from_space_.ShrinkTo(rounded_new_capacity);
   }
-  DCHECK_SEMISPACE_ALLOCATION_INFO(allocation_info_, to_space_);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
   if (!from_space_.IsCommitted()) return;
   from_space_.Uncommit();
 }
 
 size_t SemiSpaceNewSpace::CommittedPhysicalMemory() const {
   if (!base::OS::HasLazyCommits()) return CommittedMemory();
-  BasicMemoryChunk::UpdateHighWaterMark(allocation_info_.top());
+  BasicMemoryChunk::UpdateHighWaterMark(allocator_->allocation_info().top());
   size_t size = to_space_.CommittedPhysicalMemory();
   if (from_space_.IsCommitted()) {
     size += from_space_.CommittedPhysicalMemory();
@@ -567,22 +544,15 @@ void SemiSpaceNewSpace::UpdateLinearAllocationArea(Address known_top) {
   AdvanceAllocationObservers();
 
   Address new_top = known_top == 0 ? to_space_.page_low() : known_top;
-  BasicMemoryChunk::UpdateHighWaterMark(allocation_info_.top());
-  allocation_info_.Reset(new_top, to_space_.page_high());
-  // The order of the following two stores is important.
-  // See the corresponding loads in ConcurrentMarking::Run.
-  {
-    base::SharedMutexGuard<base::kExclusive> guard(linear_area_lock());
-    linear_area_original_data_.set_original_limit_relaxed(limit());
-    linear_area_original_data_.set_original_top_release(top());
-  }
+  BasicMemoryChunk::UpdateHighWaterMark(allocator_->allocation_info().top());
+  allocator_->ResetLab(new_top, to_space_.page_high(), to_space_.page_high());
 
   // The linear allocation area should reach the end of the page, so no filler
   // object is needed there to make the page iterable.
   DCHECK_EQ(limit(), to_space_.page_high());
 
   to_space_.AddRangeToActiveSystemPages(top(), limit());
-  DCHECK_SEMISPACE_ALLOCATION_INFO(allocation_info_, to_space_);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
 
   UpdateInlineAllocationLimit();
 }
@@ -604,8 +574,8 @@ void SemiSpaceNewSpace::UpdateInlineAllocationLimitForAllocation(
                                    ALIGN_TO_ALLOCATION_ALIGNMENT(min_size));
   DCHECK_LE(top(), new_limit);
   DCHECK_LE(new_limit, to_space_.page_high());
-  allocation_info_.SetLimit(new_limit);
-  DCHECK_SEMISPACE_ALLOCATION_INFO(allocation_info_, to_space_);
+  allocator_->allocation_info().SetLimit(new_limit);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
 
   // Add a filler object after the linear allocation area (if there is space
   // left), to ensure that the page will be iterable.
@@ -613,7 +583,7 @@ void SemiSpaceNewSpace::UpdateInlineAllocationLimitForAllocation(
       limit(), static_cast<int>(to_space_.page_high() - limit()));
 
 #if DEBUG
-  VerifyTop();
+  allocator_->Verify();
 #endif
 }
 
@@ -622,7 +592,7 @@ void SemiSpaceNewSpace::UpdateInlineAllocationLimit() {
 }
 
 bool SemiSpaceNewSpace::AddFreshPage() {
-  Address top = allocation_info_.top();
+  Address top = allocator_->allocation_info().top();
   DCHECK(!OldSpace::IsAtPageStart(top));
 
   // Clear remainder of current page.
@@ -678,19 +648,9 @@ void SemiSpaceNewSpace::ResetParkedAllocationBuffers() {
 
 void SemiSpaceNewSpace::FreeLinearAllocationArea() {
   AdvanceAllocationObservers();
-  MakeLinearAllocationAreaIterable();
+  allocator_->MakeLinearAllocationAreaIterable();
   UpdateInlineAllocationLimit();
 }
-
-#if DEBUG
-void SemiSpaceNewSpace::VerifyTop() const {
-  NewSpace::VerifyTop();
-
-  // original_limit_ always needs to be end of curent to space page.
-  DCHECK_EQ(linear_area_original_data_.get_original_limit_relaxed(),
-            to_space_.page_high());
-}
-#endif  // DEBUG
 
 #ifdef VERIFY_HEAP
 // We do not use the SemiSpaceObjectIterator because verification doesn't assume
@@ -698,7 +658,7 @@ void SemiSpaceNewSpace::VerifyTop() const {
 void SemiSpaceNewSpace::Verify(Isolate* isolate,
                                SpaceVerificationVisitor* visitor) const {
   // The allocation pointer should be in the space or at the very end.
-  DCHECK_SEMISPACE_ALLOCATION_INFO(allocation_info_, to_space_);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
 
   VerifyObjects(isolate, visitor);
 
@@ -874,26 +834,58 @@ bool SemiSpaceNewSpace::IsPromotionCandidate(const MemoryChunk* page) const {
   return !page->Contains(age_mark());
 }
 
-void SemiSpaceNewSpace::MakeLinearAllocationAreaIterable() {
-  Address to_top = top();
-  Page* page = Page::FromAddress(to_top - kTaggedSize);
-  if (page->Contains(to_top)) {
-    int remaining_in_page = static_cast<int>(page->area_end() - to_top);
-    heap_->CreateFillerObjectAt(to_top, remaining_in_page);
+bool SemiSpaceNewSpace::EnsureAllocation(int size_in_bytes,
+                                         AllocationAlignment alignment,
+                                         AllocationOrigin origin,
+                                         int* out_max_aligned_size) {
+  size_in_bytes = ALIGN_TO_ALLOCATION_ALIGNMENT(size_in_bytes);
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
+#if DEBUG
+  allocator_->Verify();
+#endif  // DEBUG
+
+  AdvanceAllocationObservers();
+
+  Address old_top = allocator_->top();
+  Address high = to_space_.page_high();
+  int filler_size = Heap::GetFillToAlign(old_top, alignment);
+  int aligned_size_in_bytes = size_in_bytes + filler_size;
+
+  if (old_top + aligned_size_in_bytes > high) {
+    // Not enough room in the page, try to allocate a new one.
+    if (!AddFreshPage()) {
+      // When we cannot grow NewSpace anymore we query for parked allocations.
+      if (!v8_flags.allocation_buffer_parking ||
+          !AddParkedAllocationBuffer(size_in_bytes, alignment))
+        return false;
+    }
+
+    old_top = allocator_->top();
+    high = to_space_.page_high();
+    filler_size = Heap::GetFillToAlign(old_top, alignment);
+    aligned_size_in_bytes = size_in_bytes + filler_size;
   }
+
+  if (out_max_aligned_size) {
+    *out_max_aligned_size = aligned_size_in_bytes;
+  }
+
+  DCHECK(old_top + aligned_size_in_bytes <= high);
+  UpdateInlineAllocationLimitForAllocation(aligned_size_in_bytes);
+  DCHECK_EQ(allocator_->start(), allocator_->top());
+  DCHECK_SEMISPACE_ALLOCATION_INFO(allocator_->allocation_info(), to_space_);
+  return true;
 }
 
 // -----------------------------------------------------------------------------
 // PagedSpaceForNewSpace implementation
 
-PagedSpaceForNewSpace::PagedSpaceForNewSpace(
-    Heap* heap, size_t initial_capacity, size_t max_capacity,
-    AllocationCounter& allocation_counter,
-    LinearAllocationArea& allocation_info,
-    LinearAreaOriginalData& linear_area_original_data)
+PagedSpaceForNewSpace::PagedSpaceForNewSpace(Heap* heap,
+                                             size_t initial_capacity,
+                                             size_t max_capacity,
+                                             MainAllocator* allocator)
     : PagedSpaceBase(heap, NEW_SPACE, NOT_EXECUTABLE,
-                     FreeList::CreateFreeListForNewSpace(), allocation_counter,
-                     allocation_info, linear_area_original_data,
+                     FreeList::CreateFreeListForNewSpace(), allocator,
                      CompactionSpaceKind::kNone),
       initial_capacity_(RoundDown(initial_capacity, Page::kPageSize)),
       max_capacity_(RoundDown(max_capacity, Page::kPageSize)),
@@ -968,9 +960,9 @@ void PagedSpaceForNewSpace::UpdateInlineAllocationLimit() {
 
 size_t PagedSpaceForNewSpace::AddPage(Page* page) {
   current_capacity_ += Page::kPageSize;
-  DCHECK_IMPLIES(
-      !force_allocation_success_ && !heap_->ShouldOptimizeForLoadTime(),
-      UsableCapacity() <= TotalCapacity());
+  DCHECK_IMPLIES(!should_exceed_target_capacity_,
+                 UsableCapacity() <= TotalCapacity());
+  should_exceed_target_capacity_ = false;
   return PagedSpaceBase::AddPage(page);
 }
 
@@ -1012,10 +1004,11 @@ bool PagedSpaceForNewSpace::AddPageBeyondCapacity(int size_in_bytes,
   // Allocate another page is `force_allocation_success_` is true,
   // `UsableCapacity()` is below `TotalCapacity()` and allocating another page
   // won't exceed `TotalCapacity()`, or `ShouldOptimizeForLoadTime()` is true.
-  if (force_allocation_success_ ||
+  should_exceed_target_capacity_ =
+      force_allocation_success_ || heap_->ShouldOptimizeForLoadTime();
+  if (should_exceed_target_capacity_ ||
       ((UsableCapacity() < TotalCapacity()) &&
-       (TotalCapacity() - UsableCapacity() >= Page::kPageSize)) ||
-      heap_->ShouldOptimizeForLoadTime()) {
+       (TotalCapacity() - UsableCapacity() >= Page::kPageSize))) {
     if (!heap()->CanExpandOldGeneration(
             Size() + heap()->new_lo_space()->Size() + Page::kPageSize)) {
       // Assuming all of new space is alive, doing a full GC and promoting all
@@ -1081,6 +1074,33 @@ bool PagedSpaceForNewSpace::IsPromotionCandidate(
              v8_flags.minor_ms_page_promotion_max_lab_threshold / 100);
 }
 
+bool PagedSpaceForNewSpace::EnsureAllocation(int size_in_bytes,
+                                             AllocationAlignment alignment,
+                                             AllocationOrigin origin,
+                                             int* out_max_aligned_size) {
+  if (last_lab_page_) {
+    last_lab_page_->DecreaseAllocatedLabSize(limit() - top());
+    SetLimit(top());
+    // No need to write a filler to the remaining lab because it will either be
+    // reallocated if the lab can be extended or freed otherwise.
+  }
+
+  if (!PagedSpaceBase::EnsureAllocation(size_in_bytes, alignment, origin,
+                                        out_max_aligned_size)) {
+    if (!AddPageBeyondCapacity(size_in_bytes, origin)) {
+      if (!WaitForSweepingForAllocation(size_in_bytes, origin)) {
+        return false;
+      }
+    }
+  }
+
+  last_lab_page_ = Page::FromAllocationAreaAddress(top());
+  DCHECK_NOT_NULL(last_lab_page_);
+  last_lab_page_->IncreaseAllocatedLabSize(limit() - top());
+
+  return true;
+}
+
 #ifdef VERIFY_HEAP
 void PagedSpaceForNewSpace::Verify(Isolate* isolate,
                                    SpaceVerificationVisitor* visitor) const {
@@ -1103,13 +1123,12 @@ PagedNewSpace::PagedNewSpace(Heap* heap, size_t initial_capacity,
                              size_t max_capacity,
                              LinearAllocationArea& allocation_info)
     : NewSpace(heap, allocation_info),
-      paged_space_(heap, initial_capacity, max_capacity, allocation_counter_,
-                   allocation_info_, linear_area_original_data_) {}
+      paged_space_(heap, initial_capacity, max_capacity, main_allocator()) {}
 
 PagedNewSpace::~PagedNewSpace() {
   // Tears down the space.  Heap memory was not allocated by the space, so it
   // is not deallocated here.
-  allocation_info_.Reset(kNullAddress, kNullAddress);
+  allocator_->allocation_info().Reset(kNullAddress, kNullAddress);
 
   paged_space_.TearDown();
 }

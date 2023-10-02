@@ -86,7 +86,9 @@ def handle_shard_failures_with(on_failure):
   return decorator
 
 
-def place_nomedia_on_device(dev, device_root):
+# TODO(b/293175593): Use PlaceNomediaFile after
+# https://crrev.com/c/4877296 lands
+def place_nomedia_on_device(dev, device_root, as_root=False):
   """Places .nomedia file in test data root.
 
   This helps to prevent system from scanning media files inside test data.
@@ -96,8 +98,12 @@ def place_nomedia_on_device(dev, device_root):
     device_root: Base path on device to place .nomedia file.
   """
 
-  dev.RunShellCommand(['mkdir', '-p', device_root], check_return=True)
-  dev.WriteFile('%s/.nomedia' % device_root, 'https://crbug.com/796640')
+  dev.RunShellCommand(['mkdir', '-p', device_root],
+                      check_return=True,
+                      as_root=as_root)
+  dev.WriteFile('%s/.nomedia' % device_root,
+                'https://crbug.com/796640',
+                as_root=as_root)
 
 
 # TODO(1262303): After Telemetry is supported by python3 we can re-add
@@ -131,6 +137,9 @@ class LocalDeviceEnvironment(environment.Environment):
     self._trace_all = None
     if hasattr(args, 'trace_all'):
       self._trace_all = args.trace_all
+    self._force_main_user = False
+    if hasattr(args, 'force_main_user'):
+      self._force_main_user = args.force_main_user
     self._use_persistent_shell = args.use_persistent_shell
     self._disable_test_server = args.disable_test_server
 
@@ -185,7 +194,16 @@ class LocalDeviceEnvironment(environment.Environment):
     @handle_shard_failures_with(on_failure=self.DenylistDevice)
     def prepare_device(d):
       d.WaitUntilFullyBooted()
-      if d.GetCurrentUser() != SYSTEM_USER_ID:
+
+      if self._force_main_user:
+        # Ensure the current user is the main user (the first real human user).
+        main_user = d.GetMainUser()
+        if d.GetCurrentUser() != main_user:
+          logging.info('Switching to the main user with id %s', main_user)
+          d.SwitchUser(main_user)
+        d.target_user = main_user
+      elif d.GetCurrentUser() != SYSTEM_USER_ID:
+        # TODO(b/293175593): Remove this after "force_main_user" works fine.
         # Use system user to run tasks to avoid "/sdcard "accessing issue
         # due to multiple-users. For details, see
         # https://source.android.com/docs/devices/admin/multi-user-testing
@@ -268,6 +286,10 @@ class LocalDeviceEnvironment(environment.Environment):
   @property
   def disable_test_server(self):
     return self._disable_test_server
+
+  @property
+  def force_main_user(self):
+    return self._force_main_user
 
   #override
   def TearDown(self):

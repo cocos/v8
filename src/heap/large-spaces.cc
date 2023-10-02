@@ -50,7 +50,7 @@ Tagged<HeapObject> LargeObjectSpaceObjectIterator::Next() {
 // OldLargeObjectSpace
 
 LargeObjectSpace::LargeObjectSpace(Heap* heap, AllocationSpace id)
-    : Space(heap, id, nullptr, allocation_counter_),
+    : Space(heap, id, nullptr),
       size_(0),
       page_count_(0),
       objects_size_(0),
@@ -79,6 +79,9 @@ void LargeObjectSpace::AdvanceAndInvokeAllocationObservers(Address soon_object,
   if (!heap()->IsAllocationObserverActive()) return;
 
   if (object_size >= allocation_counter_.NextBytes()) {
+    // Ensure that there is a valid object
+    heap_->CreateFillerObjectAt(soon_object, static_cast<int>(object_size));
+
     allocation_counter_.InvokeAllocationObservers(soon_object, object_size,
                                                   object_size);
   }
@@ -86,6 +89,18 @@ void LargeObjectSpace::AdvanceAndInvokeAllocationObservers(Address soon_object,
   // Large objects can be accounted immediately since no LAB is involved.
   allocation_counter_.AdvanceAllocationObservers(object_size);
 }
+
+void LargeObjectSpace::AddAllocationObserver(AllocationObserver* observer) {
+  allocation_counter_.AddAllocationObserver(observer);
+}
+
+void LargeObjectSpace::RemoveAllocationObserver(AllocationObserver* observer) {
+  allocation_counter_.RemoveAllocationObserver(observer);
+}
+
+void LargeObjectSpace::PauseAllocationObservers() {}
+
+void LargeObjectSpace::ResumeAllocationObservers() {}
 
 AllocationResult OldLargeObjectSpace::AllocateRaw(int object_size) {
   return AllocateRaw(object_size, NOT_EXECUTABLE);
@@ -103,17 +118,18 @@ AllocationResult OldLargeObjectSpace::AllocateRaw(int object_size,
     return AllocationResult::Failure();
   }
 
+  heap()->StartIncrementalMarkingIfAllocationLimitIsReached(
+      heap()->GCFlagsForIncrementalMarking(),
+      kGCCallbackScheduleIdleGarbageCollection);
+
   LargePage* page = AllocateLargePage(object_size, executable);
   if (page == nullptr) return AllocationResult::Failure();
   page->SetOldGenerationPageFlags(
       heap()->incremental_marking()->marking_mode());
   Tagged<HeapObject> object = page->GetObject();
   UpdatePendingObject(object);
-  heap()->StartIncrementalMarkingIfAllocationLimitIsReached(
-      heap()->GCFlagsForIncrementalMarking(),
-      kGCCallbackScheduleIdleGarbageCollection);
   if (heap()->incremental_marking()->black_allocation()) {
-    heap()->marking_state()->TryMarkAndAccountLiveBytes(object);
+    heap()->marking_state()->TryMarkAndAccountLiveBytes(object, object_size);
   }
   DCHECK_IMPLIES(heap()->incremental_marking()->black_allocation(),
                  heap()->marking_state()->IsMarked(object));
@@ -141,14 +157,15 @@ AllocationResult OldLargeObjectSpace::AllocateRawBackground(
     return AllocationResult::Failure();
   }
 
+  heap()->StartIncrementalMarkingIfAllocationLimitIsReachedBackground();
+
   LargePage* page = AllocateLargePage(object_size, executable);
   if (page == nullptr) return AllocationResult::Failure();
   page->SetOldGenerationPageFlags(
       heap()->incremental_marking()->marking_mode());
   Tagged<HeapObject> object = page->GetObject();
-  heap()->StartIncrementalMarkingIfAllocationLimitIsReachedBackground();
   if (heap()->incremental_marking()->black_allocation()) {
-    heap()->marking_state()->TryMarkAndAccountLiveBytes(object);
+    heap()->marking_state()->TryMarkAndAccountLiveBytes(object, object_size);
   }
   DCHECK_IMPLIES(heap()->incremental_marking()->black_allocation(),
                  heap()->marking_state()->IsMarked(object));
@@ -176,9 +193,6 @@ LargePage* LargeObjectSpace::AllocateLargePage(int object_size,
     AddPage(page, object_size);
   }
 
-  Tagged<HeapObject> object = page->GetObject();
-
-  heap()->CreateFillerObjectAt(object.address(), object_size);
   return page;
 }
 
@@ -496,6 +510,16 @@ SharedLargeObjectSpace::SharedLargeObjectSpace(Heap* heap)
     : OldLargeObjectSpace(heap, SHARED_LO_SPACE) {}
 
 AllocationResult SharedLargeObjectSpace::AllocateRawBackground(
+    LocalHeap* local_heap, int object_size) {
+  DCHECK(!v8_flags.enable_third_party_heap);
+  return OldLargeObjectSpace::AllocateRawBackground(local_heap, object_size,
+                                                    NOT_EXECUTABLE);
+}
+
+TrustedLargeObjectSpace::TrustedLargeObjectSpace(Heap* heap)
+    : OldLargeObjectSpace(heap, TRUSTED_LO_SPACE) {}
+
+AllocationResult TrustedLargeObjectSpace::AllocateRawBackground(
     LocalHeap* local_heap, int object_size) {
   DCHECK(!v8_flags.enable_third_party_heap);
   return OldLargeObjectSpace::AllocateRawBackground(local_heap, object_size,
