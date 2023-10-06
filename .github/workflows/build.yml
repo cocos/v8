@@ -440,6 +440,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
       - name: Check is_debug
         shell: bash
         run: |
@@ -452,6 +456,8 @@ jobs:
       - name: Print env
         run: |
           echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
+          echo "----- python version -----"
+          python --version
 
       - name: Clone DepotTools
         shell: bash
