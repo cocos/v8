@@ -244,7 +244,8 @@ using Variable = SnapshotTable<OpIndex, VariableData>::Key;
   V(AssumeMap)                               \
   V(AtomicRMW)                               \
   V(AtomicWord32Pair)                        \
-  V(MemoryBarrier)
+  V(MemoryBarrier)                           \
+  V(Comment)
 
 // These are operations that are not Machine operations and need to be lowered
 // before Instruction Selection, but they are not lowered during the
@@ -2063,6 +2064,8 @@ struct TaggedBitcastOp : FixedArityOperationT<1, TaggedBitcastOp> {
       : Base(input), from(from), to(to) {}
 
   void Validate(const Graph& graph) const {
+    // TODO(nicohartmann@): Without implicit trucation, the first case might not
+    // be correct anymore.
     DCHECK((from.IsWord() && to == RegisterRepresentation::Tagged()) ||
            (from == RegisterRepresentation::Tagged() &&
             to == RegisterRepresentation::PointerSized()) ||
@@ -2248,13 +2251,12 @@ struct ConstantOp : FixedArityOperationT<0, ConstantOp> {
   }
 
   uint64_t integral() const {
-    DCHECK(kind == Kind::kWord32 || kind == Kind::kWord64 ||
-           kind == Kind::kRelocatableWasmCall ||
-           kind == Kind::kRelocatableWasmStubCall);
+    DCHECK(IsIntegral());
     return storage.integral;
   }
 
   int64_t signed_integral() const {
+    DCHECK(IsIntegral());
     switch (kind) {
       case Kind::kWord32:
         return static_cast<int32_t>(storage.integral);
@@ -2354,6 +2356,12 @@ struct ConstantOp : FixedArityOperationT<0, ConstantOp> {
       default:
         UNREACHABLE();
     }
+  }
+
+  bool IsIntegral() const {
+    return kind == Kind::kWord32 || kind == Kind::kWord64 ||
+           kind == Kind::kRelocatableWasmCall ||
+           kind == Kind::kRelocatableWasmStubCall;
   }
 
   auto options() const { return std::tuple{kind, storage}; }
@@ -2868,6 +2876,16 @@ struct StoreOp : OperationT<StoreOp> {
   uint8_t element_size_log2;  // multiply index with 2^element_size_log2
   int32_t offset;             // add offset to scaled index
   bool maybe_initializing_or_transitioning;
+  uint16_t
+      shifted_indirect_pointer_tag;  // for indirect pointer stores, the
+                                     // IndirectPointerTag of the store shifted
+                                     // to the right by kIndirectPointerTagShift
+                                     // (so it fits into 16 bits).
+  // TODO(saelo): now that we have a pointer tag in these low-level operations,
+  // we could also consider passing the external pointer tag (for external
+  // pointers) through to the macro assembler (where we have routines to work
+  // with external pointers) instead of handling those earlier in the compiler.
+  // We might lose the ability to hardcode the table address though.
 
   OpEffects Effects() const {
     // Stores might depend on checks for pointer validity, object layout, bounds
@@ -2908,10 +2926,17 @@ struct StoreOp : OperationT<StoreOp> {
     return input_count == 3 ? input(2) : OpIndex::Invalid();
   }
 
-  StoreOp(OpIndex base, OpIndex index, OpIndex value, Kind kind,
-          MemoryRepresentation stored_rep, WriteBarrierKind write_barrier,
-          int32_t offset, uint8_t element_size_log2,
-          bool maybe_initializing_or_transitioning)
+  IndirectPointerTag indirect_pointer_tag() const {
+    uint64_t shifted = shifted_indirect_pointer_tag;
+    return static_cast<IndirectPointerTag>(shifted << kIndirectPointerTagShift);
+  }
+
+  StoreOp(
+      OpIndex base, OpIndex index, OpIndex value, Kind kind,
+      MemoryRepresentation stored_rep, WriteBarrierKind write_barrier,
+      int32_t offset, uint8_t element_size_log2,
+      bool maybe_initializing_or_transitioning,
+      IndirectPointerTag maybe_indirect_pointer_tag = kIndirectPointerNullTag)
       : Base(2 + index.valid()),
         kind(kind),
         stored_rep(stored_rep),
@@ -2919,7 +2944,10 @@ struct StoreOp : OperationT<StoreOp> {
         element_size_log2(element_size_log2),
         offset(offset),
         maybe_initializing_or_transitioning(
-            maybe_initializing_or_transitioning) {
+            maybe_initializing_or_transitioning),
+        shifted_indirect_pointer_tag(maybe_indirect_pointer_tag >>
+                                     kIndirectPointerTagShift) {
+    DCHECK_EQ(indirect_pointer_tag(), maybe_indirect_pointer_tag);
     input(0) = base;
     input(1) = value;
     if (index.valid()) {
@@ -2929,14 +2957,16 @@ struct StoreOp : OperationT<StoreOp> {
 
   void Validate(const Graph& graph) const {
   }
-  static StoreOp& New(Graph* graph, OpIndex base, OpIndex index, OpIndex value,
-                      Kind kind, MemoryRepresentation stored_rep,
-                      WriteBarrierKind write_barrier, int32_t offset,
-                      uint8_t element_size_log2,
-                      bool maybe_initializing_or_transitioning) {
+  static StoreOp& New(
+      Graph* graph, OpIndex base, OpIndex index, OpIndex value, Kind kind,
+      MemoryRepresentation stored_rep, WriteBarrierKind write_barrier,
+      int32_t offset, uint8_t element_size_log2,
+      bool maybe_initializing_or_transitioning,
+      IndirectPointerTag maybe_indirect_pointer_tag = kIndirectPointerNullTag) {
     return Base::New(graph, 2 + index.valid(), base, index, value, kind,
                      stored_rep, write_barrier, offset, element_size_log2,
-                     maybe_initializing_or_transitioning);
+                     maybe_initializing_or_transitioning,
+                     maybe_indirect_pointer_tag);
   }
 
   void PrintInputs(std::ostream& os, const std::string& op_index_prefix) const;
@@ -3545,7 +3575,7 @@ struct CatchBlockBeginOp : FixedArityOperationT<0, CatchBlockBeginOp> {
 // Since `OptimizationPhase` does this automatically, lowering throwing
 // operations into an arbitrary subgraph works automatically.
 struct DidntThrowOp : FixedArityOperationT<1, DidntThrowOp> {
-  static constexpr OpEffects effects = OpEffects().CanCallAnything();
+  static constexpr OpEffects effects = OpEffects().RequiredWhenUnused();
 
   // If there is a `CheckException` operation with a catch block for
   // `throwing_operation`.
@@ -5896,6 +5926,25 @@ struct FindOrderedHashEntryOp
 };
 std::ostream& operator<<(std::ostream& os, FindOrderedHashEntryOp::Kind kind);
 
+struct CommentOp : FixedArityOperationT<0, CommentOp> {
+  const char* message;
+
+  // Comments should not be removed.
+  static constexpr OpEffects effects = OpEffects().RequiredWhenUnused();
+
+  explicit CommentOp(const char* message) : message(message) {}
+
+  base::Vector<const RegisterRepresentation> outputs_rep() const { return {}; }
+
+  base::Vector<const MaybeRegisterRepresentation> inputs_rep(
+      ZoneVector<MaybeRegisterRepresentation>& storage) const {
+    return {};
+  }
+
+  void Validate(const Graph& graph) const {}
+  auto options() const { return std::tuple{message}; }
+};
+
 #if V8_ENABLE_WEBASSEMBLY
 
 const RegisterRepresentation& RepresentationFor(wasm::ValueType type);
@@ -6459,116 +6508,122 @@ struct Simd128ConstantOp : FixedArityOperationT<0, Simd128ConstantOp> {
   void PrintOptions(std::ostream& os) const;
 };
 
-#define FOREACH_SIMD_128_BINARY_OPCODE(V) \
-  V(I8x16Swizzle)                         \
-  V(I8x16Eq)                              \
-  V(I8x16Ne)                              \
-  V(I8x16GtS)                             \
-  V(I8x16GtU)                             \
-  V(I8x16GeS)                             \
-  V(I8x16GeU)                             \
-  V(I16x8Eq)                              \
-  V(I16x8Ne)                              \
-  V(I16x8GtS)                             \
-  V(I16x8GtU)                             \
-  V(I16x8GeS)                             \
-  V(I16x8GeU)                             \
-  V(I32x4Eq)                              \
-  V(I32x4Ne)                              \
-  V(I32x4GtS)                             \
-  V(I32x4GtU)                             \
-  V(I32x4GeS)                             \
-  V(I32x4GeU)                             \
-  V(F32x4Eq)                              \
-  V(F32x4Ne)                              \
-  V(F32x4Lt)                              \
-  V(F32x4Le)                              \
-  V(F64x2Eq)                              \
-  V(F64x2Ne)                              \
-  V(F64x2Lt)                              \
-  V(F64x2Le)                              \
-  V(S128And)                              \
-  V(S128AndNot)                           \
-  V(S128Or)                               \
-  V(S128Xor)                              \
-  V(I8x16SConvertI16x8)                   \
-  V(I8x16UConvertI16x8)                   \
-  V(I8x16Add)                             \
-  V(I8x16AddSatS)                         \
-  V(I8x16AddSatU)                         \
-  V(I8x16Sub)                             \
-  V(I8x16SubSatS)                         \
-  V(I8x16SubSatU)                         \
-  V(I8x16MinS)                            \
-  V(I8x16MinU)                            \
-  V(I8x16MaxS)                            \
-  V(I8x16MaxU)                            \
-  V(I8x16RoundingAverageU)                \
-  V(I16x8Q15MulRSatS)                     \
-  V(I16x8SConvertI32x4)                   \
-  V(I16x8UConvertI32x4)                   \
-  V(I16x8Add)                             \
-  V(I16x8AddSatS)                         \
-  V(I16x8AddSatU)                         \
-  V(I16x8Sub)                             \
-  V(I16x8SubSatS)                         \
-  V(I16x8SubSatU)                         \
-  V(I16x8Mul)                             \
-  V(I16x8MinS)                            \
-  V(I16x8MinU)                            \
-  V(I16x8MaxS)                            \
-  V(I16x8MaxU)                            \
-  V(I16x8RoundingAverageU)                \
-  V(I16x8ExtMulLowI8x16S)                 \
-  V(I16x8ExtMulHighI8x16S)                \
-  V(I16x8ExtMulLowI8x16U)                 \
-  V(I16x8ExtMulHighI8x16U)                \
-  V(I32x4Add)                             \
-  V(I32x4Sub)                             \
-  V(I32x4Mul)                             \
-  V(I32x4MinS)                            \
-  V(I32x4MinU)                            \
-  V(I32x4MaxS)                            \
-  V(I32x4MaxU)                            \
-  V(I32x4DotI16x8S)                       \
-  V(I32x4ExtMulLowI16x8S)                 \
-  V(I32x4ExtMulHighI16x8S)                \
-  V(I32x4ExtMulLowI16x8U)                 \
-  V(I32x4ExtMulHighI16x8U)                \
-  V(I64x2Add)                             \
-  V(I64x2Sub)                             \
-  V(I64x2Mul)                             \
-  V(I64x2Eq)                              \
-  V(I64x2Ne)                              \
-  V(I64x2GtS)                             \
-  V(I64x2GeS)                             \
-  V(I64x2ExtMulLowI32x4S)                 \
-  V(I64x2ExtMulHighI32x4S)                \
-  V(I64x2ExtMulLowI32x4U)                 \
-  V(I64x2ExtMulHighI32x4U)                \
-  V(F32x4Add)                             \
-  V(F32x4Sub)                             \
-  V(F32x4Mul)                             \
-  V(F32x4Div)                             \
-  V(F32x4Min)                             \
-  V(F32x4Max)                             \
-  V(F32x4Pmin)                            \
-  V(F32x4Pmax)                            \
-  V(F64x2Add)                             \
-  V(F64x2Sub)                             \
-  V(F64x2Mul)                             \
-  V(F64x2Div)                             \
-  V(F64x2Min)                             \
-  V(F64x2Max)                             \
-  V(F64x2Pmin)                            \
-  V(F64x2Pmax)                            \
-  V(I8x16RelaxedSwizzle)                  \
-  V(F32x4RelaxedMin)                      \
-  V(F32x4RelaxedMax)                      \
-  V(F64x2RelaxedMin)                      \
-  V(F64x2RelaxedMax)                      \
-  V(I16x8RelaxedQ15MulRS)                 \
+#define FOREACH_SIMD_128_BINARY_BASIC_OPCODE(V) \
+  V(I8x16Eq)                                    \
+  V(I8x16Ne)                                    \
+  V(I8x16GtS)                                   \
+  V(I8x16GtU)                                   \
+  V(I8x16GeS)                                   \
+  V(I8x16GeU)                                   \
+  V(I16x8Eq)                                    \
+  V(I16x8Ne)                                    \
+  V(I16x8GtS)                                   \
+  V(I16x8GtU)                                   \
+  V(I16x8GeS)                                   \
+  V(I16x8GeU)                                   \
+  V(I32x4Eq)                                    \
+  V(I32x4Ne)                                    \
+  V(I32x4GtS)                                   \
+  V(I32x4GtU)                                   \
+  V(I32x4GeS)                                   \
+  V(I32x4GeU)                                   \
+  V(F32x4Eq)                                    \
+  V(F32x4Ne)                                    \
+  V(F32x4Lt)                                    \
+  V(F32x4Le)                                    \
+  V(F64x2Eq)                                    \
+  V(F64x2Ne)                                    \
+  V(F64x2Lt)                                    \
+  V(F64x2Le)                                    \
+  V(S128And)                                    \
+  V(S128AndNot)                                 \
+  V(S128Or)                                     \
+  V(S128Xor)                                    \
+  V(I8x16SConvertI16x8)                         \
+  V(I8x16UConvertI16x8)                         \
+  V(I8x16Add)                                   \
+  V(I8x16AddSatS)                               \
+  V(I8x16AddSatU)                               \
+  V(I8x16Sub)                                   \
+  V(I8x16SubSatS)                               \
+  V(I8x16SubSatU)                               \
+  V(I8x16MinS)                                  \
+  V(I8x16MinU)                                  \
+  V(I8x16MaxS)                                  \
+  V(I8x16MaxU)                                  \
+  V(I8x16RoundingAverageU)                      \
+  V(I16x8Q15MulRSatS)                           \
+  V(I16x8SConvertI32x4)                         \
+  V(I16x8UConvertI32x4)                         \
+  V(I16x8Add)                                   \
+  V(I16x8AddSatS)                               \
+  V(I16x8AddSatU)                               \
+  V(I16x8Sub)                                   \
+  V(I16x8SubSatS)                               \
+  V(I16x8SubSatU)                               \
+  V(I16x8Mul)                                   \
+  V(I16x8MinS)                                  \
+  V(I16x8MinU)                                  \
+  V(I16x8MaxS)                                  \
+  V(I16x8MaxU)                                  \
+  V(I16x8RoundingAverageU)                      \
+  V(I16x8ExtMulLowI8x16S)                       \
+  V(I16x8ExtMulHighI8x16S)                      \
+  V(I16x8ExtMulLowI8x16U)                       \
+  V(I16x8ExtMulHighI8x16U)                      \
+  V(I32x4Add)                                   \
+  V(I32x4Sub)                                   \
+  V(I32x4Mul)                                   \
+  V(I32x4MinS)                                  \
+  V(I32x4MinU)                                  \
+  V(I32x4MaxS)                                  \
+  V(I32x4MaxU)                                  \
+  V(I32x4DotI16x8S)                             \
+  V(I32x4ExtMulLowI16x8S)                       \
+  V(I32x4ExtMulHighI16x8S)                      \
+  V(I32x4ExtMulLowI16x8U)                       \
+  V(I32x4ExtMulHighI16x8U)                      \
+  V(I64x2Add)                                   \
+  V(I64x2Sub)                                   \
+  V(I64x2Mul)                                   \
+  V(I64x2Eq)                                    \
+  V(I64x2Ne)                                    \
+  V(I64x2GtS)                                   \
+  V(I64x2GeS)                                   \
+  V(I64x2ExtMulLowI32x4S)                       \
+  V(I64x2ExtMulHighI32x4S)                      \
+  V(I64x2ExtMulLowI32x4U)                       \
+  V(I64x2ExtMulHighI32x4U)                      \
+  V(F32x4Add)                                   \
+  V(F32x4Sub)                                   \
+  V(F32x4Mul)                                   \
+  V(F32x4Div)                                   \
+  V(F32x4Min)                                   \
+  V(F32x4Max)                                   \
+  V(F32x4Pmin)                                  \
+  V(F32x4Pmax)                                  \
+  V(F64x2Add)                                   \
+  V(F64x2Sub)                                   \
+  V(F64x2Mul)                                   \
+  V(F64x2Div)                                   \
+  V(F64x2Min)                                   \
+  V(F64x2Max)                                   \
+  V(F64x2Pmin)                                  \
+  V(F64x2Pmax)                                  \
+  V(F32x4RelaxedMin)                            \
+  V(F32x4RelaxedMax)                            \
+  V(F64x2RelaxedMin)                            \
+  V(F64x2RelaxedMax)                            \
+  V(I16x8RelaxedQ15MulRS)                       \
   V(I16x8DotI8x16I7x16S)
+
+#define FOREACH_SIMD_128_BINARY_SPECIAL_OPCODE(V) \
+  V(I8x16Swizzle)                                 \
+  V(I8x16RelaxedSwizzle)
+
+#define FOREACH_SIMD_128_BINARY_OPCODE(V) \
+  FOREACH_SIMD_128_BINARY_BASIC_OPCODE(V) \
+  FOREACH_SIMD_128_BINARY_SPECIAL_OPCODE(V)
 
 struct Simd128BinopOp : FixedArityOperationT<2, Simd128BinopOp> {
   enum class Kind : uint8_t {
@@ -7337,6 +7392,15 @@ inline base::Vector<const MaybeRegisterRepresentation> Operation::inputs_rep(
 
 bool IsUnlikelySuccessor(const Block* block, const Block* successor,
                          const Graph& graph);
+
+// All operations whose `saturated_use_count` is 0 are unused and can be
+// skipped. Analyzers modify the input graph in-place when they want to mark
+// some Operations as removeable. In order to make that work for operations that
+// have no uses such as Goto and Branch, all operations that have the property
+// `IsRequiredWhenUnused()` have a non-zero `saturated_use_count`.
+V8_INLINE bool ShouldSkipOperation(const Operation& op) {
+  return op.saturated_use_count.IsZero();
+}
 
 #undef FIELD
 

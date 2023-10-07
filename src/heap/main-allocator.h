@@ -49,12 +49,16 @@ class LinearAreaOriginalData {
 
 class MainAllocator {
  public:
+  enum SupportsExtendingLAB { kYes, kNo };
+
   MainAllocator(Heap* heap, SpaceWithLinearArea* space,
-                CompactionSpaceKind compaction_space_kind);
+                CompactionSpaceKind compaction_space_kind,
+                SupportsExtendingLAB supports_extending_lab);
 
   // This constructor allows to pass in the address of a LinearAllocationArea.
   MainAllocator(Heap* heap, SpaceWithLinearArea* space,
                 CompactionSpaceKind compaction_space_kind,
+                SupportsExtendingLAB supports_extending_lab,
                 LinearAllocationArea& allocation_info);
 
   // Returns the allocation pointer in this space.
@@ -81,7 +85,8 @@ class MainAllocator {
   }
 
   void MoveOriginalTopForward();
-  void ResetLab(Address start, Address end, Address extended_end);
+  V8_EXPORT_PRIVATE void ResetLab(Address start, Address end,
+                                  Address extended_end);
   V8_EXPORT_PRIVATE bool IsPendingAllocation(Address object_address);
   void MaybeFreeUnusedLab(LinearAllocationArea lab);
 
@@ -106,8 +111,8 @@ class MainAllocator {
                                       AllocationAlignment alignment,
                                       AllocationOrigin);
 
-  void AddAllocationObserver(AllocationObserver* observer);
-  void RemoveAllocationObserver(AllocationObserver* observer);
+  V8_EXPORT_PRIVATE void AddAllocationObserver(AllocationObserver* observer);
+  V8_EXPORT_PRIVATE void RemoveAllocationObserver(AllocationObserver* observer);
   void PauseAllocationObservers();
   void ResumeAllocationObservers();
 
@@ -126,9 +131,29 @@ class MainAllocator {
 
   V8_INLINE bool TryFreeLast(Address object_address, int object_size);
 
+  // When allocation observers are active we may use a lower limit to allow the
+  // observers to 'interrupt' earlier than the natural limit. Given a linear
+  // area bounded by [start, end), this function computes the limit to use to
+  // allow proper observation based on existing observers. min_size specifies
+  // the minimum size that the limited area should have.
+  Address ComputeLimit(Address start, Address end, size_t min_size) const;
+
 #if DEBUG
   void Verify() const;
 #endif  // DEBUG
+
+  // Checks whether the LAB is currently in use.
+  V8_INLINE bool IsLabValid() { return allocation_info_.top() != kNullAddress; }
+
+  void UpdateInlineAllocationLimit();
+
+  V8_EXPORT_PRIVATE void FreeLinearAllocationArea();
+
+  void ExtendLAB(Address limit);
+
+  bool supports_extending_lab() const {
+    return supports_extending_lab_ == SupportsExtendingLAB::kYes;
+  }
 
  private:
   // Allocates an object from the linear allocation area. Assumes that the
@@ -139,9 +164,9 @@ class MainAllocator {
   // Tries to allocate an aligned object from the linear allocation area.
   // Returns nullptr if the linear allocation area does not fit the object.
   // Otherwise, returns the object pointer and writes the allocation size
-  // (object size + alignment filler size) to the size_in_bytes.
+  // (object size + alignment filler size) to the result_aligned_size_in_bytes.
   V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult
-  AllocateFastAligned(int size_in_bytes, int* aligned_size_in_bytes,
+  AllocateFastAligned(int size_in_bytes, int* result_aligned_size_in_bytes,
                       AllocationAlignment alignment, AllocationOrigin origin);
 
   // Slow path of allocation function
@@ -160,6 +185,9 @@ class MainAllocator {
   AllocateRawSlowAligned(int size_in_bytes, AllocationAlignment alignment,
                          AllocationOrigin origin = AllocationOrigin::kRuntime);
 
+  bool EnsureAllocation(int size_in_bytes, AllocationAlignment alignment,
+                        AllocationOrigin origin, int* out_max_aligned_size);
+
   LinearAreaOriginalData& linear_area_original_data() {
     return linear_area_original_data_;
   }
@@ -168,7 +196,11 @@ class MainAllocator {
     return linear_area_original_data_;
   }
 
+  int ObjectAlignment() const;
+
   AllocationSpace identity() const;
+
+  bool SupportsAllocationObserver() const { return !is_compaction_space(); }
 
   bool is_compaction_space() const {
     return compaction_space_kind_ != CompactionSpaceKind::kNone;
@@ -179,6 +211,7 @@ class MainAllocator {
   Heap* heap_;
   SpaceWithLinearArea* space_;
   CompactionSpaceKind compaction_space_kind_;
+  const SupportsExtendingLAB supports_extending_lab_;
 
   AllocationCounter allocation_counter_;
   LinearAllocationArea& allocation_info_;

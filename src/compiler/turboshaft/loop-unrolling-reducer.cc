@@ -28,6 +28,12 @@ LoopFinder::LoopInfo LoopFinder::VisitLoop(Block* header) {
   DCHECK_GE(backedge->index().id(), header->index().id());
 
   LoopInfo info;
+  // The header is skipped by the while-loop below, so we initialize {info} with
+  // the `op_count` from {header}, and a `block_count` of 1 (= the header).
+  info.op_count = OpCountUpperBound(header);
+  info.start = header;
+  info.end = backedge;
+  info.block_count = 1;
 
   queue_.clear();
   queue_.push_back(backedge);
@@ -51,7 +57,7 @@ LoopFinder::LoopInfo LoopFinder::VisitLoop(Block* header) {
       }
     }
     info.block_count++;
-    info.op_count += curr->end().id() - curr->begin().id();
+    info.op_count += OpCountUpperBound(curr);
     loop_headers_[curr->index()] = header;
     Block* pred_start = curr->LastPredecessor();
     if (curr->IsLoop()) {
@@ -65,11 +71,6 @@ LoopFinder::LoopInfo LoopFinder::VisitLoop(Block* header) {
       queue_.push_back(pred);
     }
   }
-
-  info.start = header;
-  info.end = backedge;
-  // We increment the `block_count` by 1 to account for the loop header.
-  info.block_count += 1;
 
   return info;
 }
@@ -396,16 +397,34 @@ bool StaticCanonicalForLoopMatcher::HasFewIterations(
     case CmpOp::kSignedGreaterThan:
     case CmpOp::kSignedGreaterThanOrEqual:
     case CmpOp::kEqual:
-      return HasFewerIterationsThan(static_cast<int64_t>(initial_input),
-                                    static_cast<int64_t>(cmp_cst), cmp_op,
-                                    static_cast<int64_t>(binop_cst), binop_op,
-                                    binop_rep, max_iter_, iter_count);
+      if (binop_rep == WordRepresentation::Word32()) {
+        return HasFewerIterationsThan<int32_t>(
+            static_cast<int32_t>(initial_input), static_cast<int32_t>(cmp_cst),
+            cmp_op, static_cast<int32_t>(binop_cst), binop_op, binop_rep,
+            max_iter_, iter_count);
+      } else {
+        DCHECK_EQ(binop_rep, WordRepresentation::Word64());
+        return HasFewerIterationsThan<int64_t>(
+            static_cast<int64_t>(initial_input), static_cast<int64_t>(cmp_cst),
+            cmp_op, static_cast<int64_t>(binop_cst), binop_op, binop_rep,
+            max_iter_, iter_count);
+      }
     case CmpOp::kUnsignedLessThan:
     case CmpOp::kUnsignedLessThanOrEqual:
     case CmpOp::kUnsignedGreaterThan:
     case CmpOp::kUnsignedGreaterThanOrEqual:
-      return HasFewerIterationsThan(initial_input, cmp_cst, cmp_op, binop_cst,
-                                    binop_op, binop_rep, max_iter_, iter_count);
+      if (binop_rep == WordRepresentation::Word32()) {
+        return HasFewerIterationsThan<uint32_t>(
+            static_cast<uint32_t>(initial_input),
+            static_cast<uint32_t>(cmp_cst), cmp_op,
+            static_cast<uint32_t>(binop_cst), binop_op, binop_rep, max_iter_,
+            iter_count);
+      } else {
+        DCHECK_EQ(binop_rep, WordRepresentation::Word64());
+        return HasFewerIterationsThan<uint64_t>(initial_input, cmp_cst, cmp_op,
+                                                binop_cst, binop_op, binop_rep,
+                                                max_iter_, iter_count);
+      }
   }
 }
 
@@ -451,21 +470,21 @@ StaticCanonicalForLoopMatcher::InvertComparisonOp(CmpOp op) {
     case CmpOp::kEqual:
       return CmpOp::kEqual;
     case CmpOp::kSignedLessThan:
-      return CmpOp::kSignedGreaterThanOrEqual;
-    case CmpOp::kSignedLessThanOrEqual:
       return CmpOp::kSignedGreaterThan;
+    case CmpOp::kSignedLessThanOrEqual:
+      return CmpOp::kSignedGreaterThanOrEqual;
     case CmpOp::kUnsignedLessThan:
-      return CmpOp::kUnsignedGreaterThanOrEqual;
-    case CmpOp::kUnsignedLessThanOrEqual:
       return CmpOp::kUnsignedGreaterThan;
+    case CmpOp::kUnsignedLessThanOrEqual:
+      return CmpOp::kUnsignedGreaterThanOrEqual;
     case CmpOp::kSignedGreaterThan:
-      return CmpOp::kSignedLessThanOrEqual;
-    case CmpOp::kSignedGreaterThanOrEqual:
       return CmpOp::kSignedLessThan;
+    case CmpOp::kSignedGreaterThanOrEqual:
+      return CmpOp::kSignedLessThanOrEqual;
     case CmpOp::kUnsignedGreaterThan:
-      return CmpOp::kUnsignedLessThanOrEqual;
-    case CmpOp::kUnsignedGreaterThanOrEqual:
       return CmpOp::kUnsignedLessThan;
+    case CmpOp::kUnsignedGreaterThanOrEqual:
+      return CmpOp::kUnsignedLessThanOrEqual;
   }
 }
 

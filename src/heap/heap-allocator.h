@@ -13,6 +13,7 @@
 namespace v8 {
 namespace internal {
 
+class AllocationObserver;
 class CodeLargeObjectSpace;
 class ConcurrentAllocator;
 class Heap;
@@ -82,10 +83,21 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
   void MarkLinearAllocationAreaBlack();
   void UnmarkLinearAllocationArea();
 
+  void PauseAllocationObservers();
+  void ResumeAllocationObservers();
+
+  void AddAllocationObserver(AllocationObserver* observer,
+                             AllocationObserver* new_space_observer);
+  void RemoveAllocationObserver(AllocationObserver* observer,
+                                AllocationObserver* new_space_observer);
+
   MainAllocator* new_space_allocator() { return new_space_allocator_; }
   MainAllocator* old_space_allocator() { return old_space_allocator_; }
   MainAllocator* trusted_space_allocator() { return trusted_space_allocator_; }
   MainAllocator* code_space_allocator() { return code_space_allocator_; }
+  ConcurrentAllocator* shared_space_allocator() {
+    return shared_old_allocator_;
+  }
 
  private:
   V8_INLINE PagedSpace* code_space() const;

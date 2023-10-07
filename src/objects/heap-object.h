@@ -9,6 +9,7 @@
 #include "src/common/globals.h"
 #include "src/objects/instance-type.h"
 #include "src/objects/tagged-field.h"
+#include "src/sandbox/indirect-pointer-tag.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -230,7 +231,9 @@ class HeapObject : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   //
   // IndirectPointer field accessors.
   //
-  inline Tagged<Object> ReadIndirectPointerField(size_t offset) const;
+  template <IndirectPointerTag tag>
+  inline Tagged<Object> ReadIndirectPointerField(
+      size_t offset, Isolate* isolate, InstanceType expected_type) const;
 
   //
   // CodePointer field accessors.
@@ -249,8 +252,10 @@ class HeapObject : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   inline ObjectSlot RawField(int byte_offset) const;
   inline MaybeObjectSlot RawMaybeWeakField(int byte_offset) const;
   inline InstructionStreamSlot RawInstructionStreamField(int byte_offset) const;
-  inline ExternalPointerSlot RawExternalPointerField(int byte_offset) const;
-  inline IndirectPointerSlot RawIndirectPointerField(int byte_offset) const;
+  inline ExternalPointerSlot RawExternalPointerField(
+      int byte_offset, ExternalPointerTag tag) const;
+  inline IndirectPointerSlot RawIndirectPointerField(
+      int byte_offset, IndirectPointerTag tag) const;
 
   DECL_CAST(HeapObject)
 

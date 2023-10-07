@@ -77,27 +77,12 @@ class V8_EXPORT_PRIVATE Space : public BaseSpace {
   Space(const Space&) = delete;
   Space& operator=(const Space&) = delete;
 
-  virtual void AddAllocationObserver(AllocationObserver* observer) = 0;
-  virtual void RemoveAllocationObserver(AllocationObserver* observer) = 0;
-  virtual void PauseAllocationObservers() = 0;
-  virtual void ResumeAllocationObservers() = 0;
-
   // Returns size of objects. Can differ from the allocated size
   // (e.g. see OldLargeObjectSpace).
   virtual size_t SizeOfObjects() const { return Size(); }
 
   // Return the available bytes without growing.
   virtual size_t Available() const = 0;
-
-  virtual int RoundSizeDownToObjectAlignment(int size) const {
-    if (id_ == CODE_SPACE) {
-      return RoundDown(size, kCodeAlignment);
-    } else if (V8_COMPRESS_POINTERS_8GB_BOOL) {
-      return RoundDown(size, kObjectAlignment8GbHeap);
-    } else {
-      return RoundDown(size, kTaggedSize);
-    }
-  }
 
   virtual std::unique_ptr<ObjectIterator> GetObjectIterator(Heap* heap) = 0;
 
@@ -295,16 +280,18 @@ class LocalAllocationBuffer {
 class V8_EXPORT_PRIVATE SpaceWithLinearArea : public Space {
  public:
   // Creates this space with a new MainAllocator instance.
-  SpaceWithLinearArea(Heap* heap, AllocationSpace id,
-                      std::unique_ptr<FreeList> free_list,
-                      CompactionSpaceKind compaction_space_kind);
+  SpaceWithLinearArea(
+      Heap* heap, AllocationSpace id, std::unique_ptr<FreeList> free_list,
+      CompactionSpaceKind compaction_space_kind,
+      MainAllocator::SupportsExtendingLAB supports_extending_lab);
 
   // Creates this space with a new MainAllocator instance and passes
   // `allocation_info` to its constructor.
-  SpaceWithLinearArea(Heap* heap, AllocationSpace id,
-                      std::unique_ptr<FreeList> free_list,
-                      CompactionSpaceKind compaction_space_kind,
-                      LinearAllocationArea& allocation_info);
+  SpaceWithLinearArea(
+      Heap* heap, AllocationSpace id, std::unique_ptr<FreeList> free_list,
+      CompactionSpaceKind compaction_space_kind,
+      MainAllocator::SupportsExtendingLAB supports_extending_lab,
+      LinearAllocationArea& allocation_info);
 
   // Creates this space and uses the existing `allocator`. It doesn't create a
   // new MainAllocator instance.
@@ -313,43 +300,7 @@ class V8_EXPORT_PRIVATE SpaceWithLinearArea : public Space {
                       CompactionSpaceKind compaction_space_kind,
                       MainAllocator* allocator);
 
-  virtual bool SupportsAllocationObserver() const = 0;
-
-  // Returns the allocation pointer in this space.
-  Address top() const { return allocator_->top(); }
-  Address limit() const { return allocator_->limit(); }
-
-  // The allocation top address.
-  Address* allocation_top_address() const {
-    return allocator_->allocation_top_address();
-  }
-
-  // The allocation limit address.
-  Address* allocation_limit_address() const {
-    return allocator_->allocation_limit_address();
-  }
-
   MainAllocator* main_allocator() { return allocator_; }
-
-  // Methods needed for allocation observers.
-  void AddAllocationObserver(AllocationObserver* observer) override;
-  void RemoveAllocationObserver(AllocationObserver* observer) override;
-  void ResumeAllocationObservers() override;
-  void PauseAllocationObservers() override;
-
-  void AdvanceAllocationObservers();
-
-  virtual void FreeLinearAllocationArea() = 0;
-
-  // When allocation observers are active we may use a lower limit to allow the
-  // observers to 'interrupt' earlier than the natural limit. Given a linear
-  // area bounded by [start, end), this function computes the limit to use to
-  // allow proper observation based on existing observers. min_size specifies
-  // the minimum size that the limited area should have.
-  Address ComputeLimit(Address start, Address end, size_t min_size) const;
-  virtual void UpdateInlineAllocationLimit() = 0;
-
-  void PrintAllocationsOrigins() const;
 
   V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult
   AllocateRaw(int size_in_bytes, AllocationAlignment alignment,
@@ -365,6 +316,10 @@ class V8_EXPORT_PRIVATE SpaceWithLinearArea : public Space {
                                 AllocationAlignment alignment,
                                 AllocationOrigin origin,
                                 int* out_max_aligned_size) = 0;
+
+  virtual void FreeLinearAllocationArea() = 0;
+
+  virtual void UpdateInlineAllocationLimit() = 0;
 
   // TODO(chromium:1480975): Move the LAB out of the space.
   MainAllocator* allocator_;

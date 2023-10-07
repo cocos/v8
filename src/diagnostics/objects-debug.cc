@@ -1206,7 +1206,7 @@ void PropertyCell::PropertyCellVerify(Isolate* isolate) {
 }
 
 void TrustedObject::TrustedObjectVerify(Isolate* isolate) {
-#if defined(V8_CODE_POINTER_SANDBOXING)
+#if defined(V8_ENABLE_SANDBOX)
   // TODO(saelo): check here that the object lives in trusted space once we
   // actually allocate them there. If possible, also check (elsewhere in this
   // file) that no other type of object lives in trusted space.
@@ -1215,10 +1215,16 @@ void TrustedObject::TrustedObjectVerify(Isolate* isolate) {
 
 void ExposedTrustedObject::ExposedTrustedObjectVerify(Isolate* isolate) {
   TrustedObjectVerify(isolate);
-#if defined(V8_CODE_POINTER_SANDBOXING)
+#if defined(V8_ENABLE_SANDBOX)
   // Check that the self indirect pointer is consistent, i.e. points back to
   // this object.
-  CHECK_EQ(ReadIndirectPointerField(kSelfIndirectPointerOffset), *this);
+  InstanceType instance_type = map()->instance_type();
+  IndirectPointerTag tag = IndirectPointerTagFromInstanceType(instance_type);
+  // We can't use ReadIndirectPointerField here because the tag is not a
+  // compile-time constant.
+  Tagged<Object> self =
+      RawIndirectPointerField(kSelfIndirectPointerOffset, tag).load(isolate);
+  CHECK_EQ(self, *this);
 #endif
 }
 

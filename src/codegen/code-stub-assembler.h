@@ -130,12 +130,18 @@ enum class PrimitiveType { kBoolean, kNumber, kString, kSymbol };
   V(ShadowRealmImportValueFulfilledSFI,                                        \
     shadow_realm_import_value_fulfilled_sfi,                                   \
     ShadowRealmImportValueFulfilledSFI)                                        \
-  V(ArrayFromAsyncOnFulfilledSharedFun,                                        \
-    array_from_async_on_fulfilled_shared_fun,                                  \
-    ArrayFromAsyncOnFulfilledSharedFun)                                        \
-  V(ArrayFromAsyncOnRejectedSharedFun,                                         \
-    array_from_async_on_rejected_shared_fun,                                   \
-    ArrayFromAsyncOnRejectedSharedFun)
+  V(ArrayFromAsyncIterableOnFulfilledSharedFun,                                \
+    array_from_async_iterable_on_fulfilled_shared_fun,                         \
+    ArrayFromAsyncIterableOnFulfilledSharedFun)                                \
+  V(ArrayFromAsyncIterableOnRejectedSharedFun,                                 \
+    array_from_async_iterable_on_rejected_shared_fun,                          \
+    ArrayFromAsyncIterableOnRejectedSharedFun)                                 \
+  V(ArrayFromAsyncArrayLikeOnFulfilledSharedFun,                               \
+    array_from_async_array_like_on_fulfilled_shared_fun,                       \
+    ArrayFromAsyncArrayLikeOnFulfilledSharedFun)                               \
+  V(ArrayFromAsyncArrayLikeOnRejectedSharedFun,                                \
+    array_from_async_array_like_on_rejected_shared_fun,                        \
+    ArrayFromAsyncArrayLikeOnRejectedSharedFun)
 
 #define UNIQUE_INSTANCE_TYPE_IMMUTABLE_IMMOVABLE_MAP_ADAPTER( \
     V, rootIndexName, rootAccessorName, class_name)           \
@@ -1197,7 +1203,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<RawPtrT> LoadCodeEntrypointViaIndirectPointerField(
       TNode<HeapObject> object, TNode<IntPtrT> offset);
 
-#ifdef V8_CODE_POINTER_SANDBOXING
+#ifdef V8_ENABLE_SANDBOX
   // Helper function to load a CodePointerHandle from an object and compute the
   // offset into the code pointer table from it.
   TNode<UintPtrT> ComputeCodePointerTableEntryOffset(
@@ -1800,21 +1806,23 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Store to an indirect pointer field. This involves loading the index for
   // the pointer table entry owned by the pointed-to object (which points back
   // to it) and storing that into the specified field.
-  // TODO(saelo) Currently, only Code objects can be referenced through
-  // indirect pointers, and so we only support these here, but we should
-  // generalize this.
+  // Stores that may require a write barrier also need to know the indirect
+  // pointer tag for the field. Otherwise, it is not needed
   void StoreIndirectPointerField(TNode<HeapObject> object, int offset,
-                                 TNode<Code> value);
-  void StoreIndirectPointerFieldNoWriteBarrier(TNode<HeapObject> object,
-                                               int offset, TNode<Code> value);
+                                 IndirectPointerTag tag,
+                                 TNode<ExposedTrustedObject> value);
+  void StoreIndirectPointerFieldNoWriteBarrier(
+      TNode<HeapObject> object, int offset, IndirectPointerTag tag,
+      TNode<ExposedTrustedObject> value);
 
   // Store to a field that either contains an indirect pointer (when the
   // sandbox is enabled) or a regular (tagged) pointer otherwise.
   void StoreMaybeIndirectPointerField(TNode<HeapObject> object, int offset,
-                                      TNode<Code> value);
-  void StoreMaybeIndirectPointerFieldNoWriteBarrier(TNode<HeapObject> object,
-                                                    int offset,
-                                                    TNode<Code> value);
+                                      IndirectPointerTag tag,
+                                      TNode<ExposedTrustedObject> value);
+  void StoreMaybeIndirectPointerFieldNoWriteBarrier(
+      TNode<HeapObject> object, int offset, IndirectPointerTag tag,
+      TNode<ExposedTrustedObject> value);
 
   template <class T>
   void StoreObjectFieldNoWriteBarrier(TNode<HeapObject> object,

@@ -129,6 +129,7 @@ class Space;
 class StressScavengeObserver;
 class TimedHistogram;
 class TrustedLargeObjectSpace;
+class TrustedRange;
 class TrustedSpace;
 class WeakObjectRetainer;
 
@@ -656,8 +657,8 @@ class Heap final {
 
   void CompactWeakArrayLists();
 
-  V8_EXPORT_PRIVATE void AddRetainedMap(Handle<NativeContext> context,
-                                        Handle<Map> map);
+  V8_EXPORT_PRIVATE void AddRetainedMaps(Handle<NativeContext> context,
+                                         GlobalHandleVector<Map> maps);
 
   // This event is triggered after object is moved to a new place.
   void OnMoveEvent(Tagged<HeapObject> source, Tagged<HeapObject> target,
@@ -751,7 +752,8 @@ class Heap final {
   // Getters for spaces. =======================================================
   // ===========================================================================
 
-  inline Address NewSpaceTop();
+  V8_INLINE Address NewSpaceTop();
+  V8_INLINE Address NewSpaceLimit();
 
   NewSpace* new_space() const { return new_space_; }
   inline PagedNewSpace* paged_new_space() const;
@@ -791,9 +793,9 @@ class Heap final {
   }
 #endif  // V8_COMPRESS_POINTERS
 
-#ifdef V8_CODE_POINTER_SANDBOXING
+#ifdef V8_ENABLE_SANDBOX
   CodePointerTable::Space* code_pointer_space() { return &code_pointer_space_; }
-#endif  // V8_CODE_POINTER_SANDBOXING
+#endif  // V8_ENABLE_SANDBOX
 
   // ===========================================================================
   // Getters to other components. ==============================================
@@ -2140,10 +2142,10 @@ class Heap final {
   IndirectPointerTable::Space indirect_pointer_space_;
 #endif  // V8_COMPRESS_POINTERS
 
-#ifdef V8_CODE_POINTER_SANDBOXING
+#ifdef V8_ENABLE_SANDBOX
   // The space in the process-wide code pointer table managed by this heap.
   CodePointerTable::Space code_pointer_space_;
-#endif  // V8_CODE_POINTER_SANDBOXING
+#endif  // V8_ENABLE_SANDBOX
 
   LocalHeap* main_thread_local_heap_ = nullptr;
 
@@ -2254,6 +2256,12 @@ class Heap final {
   CodeRange* code_range_ = nullptr;
 #else
   std::unique_ptr<CodeRange> code_range_;
+#endif
+
+  // The process-wide virtual space reserved for trusted objects in the V8 heap.
+  // Only used when the sandbox is enabled.
+#if V8_ENABLE_SANDBOX
+  TrustedRange* trusted_range_ = nullptr;
 #endif
 
   v8::CppHeap* cpp_heap_ = nullptr;  // Owned by the embedder.
@@ -2388,6 +2396,7 @@ class Heap final {
   template <typename ConcreteVisitor>
   friend class MarkingVisitorBase;
   friend class MarkCompactCollector;
+  friend class MemoryBalancer;
   friend class MinorGCJob;
   friend class MinorGCTaskObserver;
   friend class MinorMarkSweepCollector;
@@ -2425,8 +2434,9 @@ class Heap final {
 
   // Used in cctest.
   friend class heap::HeapTester;
-
-  friend class MemoryBalancer;
+  FRIEND_TEST(SpacesTest, InlineAllocationObserverCadence);
+  FRIEND_TEST(SpacesTest, AllocationObserver);
+  friend class HeapInternalsBase;
 };
 
 class HeapStats {
@@ -2662,44 +2672,24 @@ class HeapObjectAllocationTracker {
 template <typename T>
 inline T ForwardingAddress(T heap_obj);
 
-// Address block allocator compatible with standard containers which registers
-// its allocated range as strong roots.
-class StrongRootBlockAllocator {
- public:
-  using pointer = Address*;
-  using const_pointer = const Address*;
-  using reference = Address&;
-  using const_reference = const Address&;
-  using value_type = Address;
-  using size_type = size_t;
-  using difference_type = ptrdiff_t;
-  template <class U>
-  struct rebind;
-
-  explicit StrongRootBlockAllocator(Heap* heap) : heap_(heap) {}
-
-  Address* allocate(size_t n);
-  void deallocate(Address* p, size_t n) noexcept;
-
- private:
-  Heap* heap_;
-};
-
-// Rebinding to Address gives another StrongRootBlockAllocator.
+// Specialized strong root allocator for blocks of Addresses, retained
+// as strong references.
 template <>
-struct StrongRootBlockAllocator::rebind<Address> {
-  using other = StrongRootBlockAllocator;
-};
+class StrongRootAllocator<Address> : public StrongRootAllocatorBase {
+ public:
+  using value_type = Address;
 
-// Rebinding to something other than Address gives a std::allocator that
-// is copy-constructable from StrongRootBlockAllocator.
-template <class U>
-struct StrongRootBlockAllocator::rebind {
-  class other : public std::allocator<U> {
-   public:
-    // NOLINTNEXTLINE
-    other(const StrongRootBlockAllocator&) {}
-  };
+  explicit StrongRootAllocator(Heap* heap) : StrongRootAllocatorBase(heap) {}
+  explicit StrongRootAllocator(v8::Isolate* isolate)
+      : StrongRootAllocatorBase(isolate) {}
+  template <typename U>
+  StrongRootAllocator(const StrongRootAllocator<U>& other) V8_NOEXCEPT
+      : StrongRootAllocatorBase(other) {}
+
+  Address* allocate(size_t n) { return allocate_impl(n); }
+  void deallocate(Address* p, size_t n) noexcept {
+    return deallocate_impl(p, n);
+  }
 };
 
 class V8_EXPORT_PRIVATE V8_NODISCARD EmbedderStackStateScope final {
@@ -2746,9 +2736,9 @@ class V8_NODISCARD CppClassNamesAsHeapObjectNameScope final {
 // Opt out from libc++ backing sanitization, since root iteration walks up to
 // the capacity.
 #ifdef _LIBCPP_HAS_ASAN_CONTAINER_ANNOTATIONS_FOR_ALL_ALLOCATORS
-template <>
+template <typename T>
 struct ::std::__asan_annotate_container_with_allocator<
-    v8::internal::StrongRootBlockAllocator> : ::std::false_type {};
+    v8::internal::StrongRootAllocator<T>> : ::std::false_type {};
 #endif  // _LIBCPP_HAS_ASAN_CONTAINER_ANNOTATIONS_FOR_ALL_ALLOCATORS
 
 #endif  // V8_HEAP_HEAP_H_

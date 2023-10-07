@@ -141,6 +141,7 @@ class RootVisitor;
 class SetupIsolateDelegate;
 class Simulator;
 class SnapshotData;
+class StackFrame;
 class StringForwardingTable;
 class StringTable;
 class StubCache;
@@ -625,6 +626,12 @@ class V8_EXPORT_PRIVATE Isolate final : private HiddenFactory {
     friend class EntryStackItem;
   };
 
+  // Used for walking the promise tree for catch prediction.
+  struct PromiseHandler {
+    Handle<JSReceiver> receiver;
+    bool catches;
+  };
+
   static void InitializeOncePerProcess();
 
   // Creates Isolate object. Must be used instead of constructing Isolate with
@@ -918,6 +925,12 @@ class V8_EXPORT_PRIVATE Isolate final : private HiddenFactory {
   // Heuristically guess whether a Promise is handled by user catch handler
   bool PromiseHasUserDefinedRejectHandler(Handle<JSPromise> promise);
 
+  // Walks the promise tree and calls a callback on every handler an exception
+  // is likely to hit. Used in catch prediction. Will end the walk and return
+  // true if a callback returns true, otherwise returns false.
+  bool WalkPromiseTree(Handle<JSPromise> promise,
+                       std::function<bool(PromiseHandler)> callback);
+
   class V8_NODISCARD ExceptionScope {
    public:
     // Scope currently can only be used for regular exceptions,
@@ -1042,6 +1055,7 @@ class V8_EXPORT_PRIVATE Isolate final : private HiddenFactory {
     CAUGHT_BY_ASYNC_AWAIT
   };
   CatchType PredictExceptionCatcher();
+  CatchType PredictExceptionCatchAtFrame(v8::internal::StackFrame* frame);
 
   void ScheduleThrow(Tagged<Object> exception);
   // Re-set pending message, script and positions reported to the TryCatch
@@ -2036,6 +2050,10 @@ class V8_EXPORT_PRIVATE Isolate final : private HiddenFactory {
 
   const IndirectPointerTable& indirect_pointer_table() const {
     return isolate_data_.indirect_pointer_table_;
+  }
+
+  Address indirect_pointer_table_base_address() const {
+    return isolate_data_.indirect_pointer_table_.base_address();
   }
 #endif  // V8_COMPRESS_POINTERS
 

@@ -104,15 +104,6 @@ class SemiSpace final : public Space {
   void PrependPage(Page* page);
   void MovePageToTheEnd(Page* page);
 
-  void AddAllocationObserver(AllocationObserver* observer) override {
-    UNREACHABLE();
-  }
-  void RemoveAllocationObserver(AllocationObserver* observer) override {
-    UNREACHABLE();
-  }
-  void PauseAllocationObservers() override { UNREACHABLE(); }
-  void ResumeAllocationObservers() override { UNREACHABLE(); }
-
   Page* InitializePage(MemoryChunk* chunk) final;
 
   // Age mark accessors.
@@ -230,7 +221,9 @@ class NewSpace : NON_EXPORTED_BASE(public SpaceWithLinearArea) {
   using iterator = PageIterator;
   using const_iterator = ConstPageIterator;
 
-  NewSpace(Heap* heap, LinearAllocationArea& allocation_info);
+  NewSpace(Heap* heap,
+           MainAllocator::SupportsExtendingLAB supports_extending_lab,
+           LinearAllocationArea& allocation_info);
 
   inline bool Contains(Tagged<Object> o) const;
   inline bool Contains(Tagged<HeapObject> o) const;
@@ -285,8 +278,6 @@ class NewSpace : NON_EXPORTED_BASE(public SpaceWithLinearArea) {
   base::Mutex mutex_;
 
   virtual void RemovePage(Page* page) = 0;
-
-  bool SupportsAllocationObserver() const final { return true; }
 };
 
 // -----------------------------------------------------------------------------
@@ -322,10 +313,10 @@ class V8_EXPORT_PRIVATE SemiSpaceNewSpace final : public NewSpace {
 
   // Return the allocated bytes in the active semispace.
   size_t Size() const final {
-    DCHECK_GE(top(), to_space_.page_low());
+    DCHECK_GE(allocator_->top(), to_space_.page_low());
     return (to_space_.current_capacity() - Page::kPageSize) / Page::kPageSize *
                MemoryChunkLayout::AllocatableMemoryInDataPage() +
-           static_cast<size_t>(top() - to_space_.page_low());
+           static_cast<size_t>(allocator_->top() - to_space_.page_low());
   }
 
   size_t SizeOfObjects() const final { return Size(); }
@@ -590,15 +581,16 @@ class V8_EXPORT_PRIVATE PagedSpaceForNewSpace final : public PagedSpaceBase {
 
   // Return the available bytes without growing.
   size_t Available() const final {
-    return PagedSpaceBase::Available() + limit() - top();
+    return PagedSpaceBase::Available() + allocator_->limit() -
+           allocator_->top();
   }
 
- private:
   size_t UsableCapacity() const {
     DCHECK_LE(free_list_->wasted_bytes(), current_capacity_);
     return current_capacity_ - free_list_->wasted_bytes();
   }
 
+ private:
   bool AllocatePage();
 
   const size_t initial_capacity_;

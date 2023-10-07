@@ -521,6 +521,10 @@ class ABSL_LOCKABLE Mutex {
                 int flags) ABSL_ATTRIBUTE_COLD;
   // slow path release
   void UnlockSlow(SynchWaitParams* waitp) ABSL_ATTRIBUTE_COLD;
+  // TryLock slow path.
+  bool TryLockSlow();
+  // ReaderTryLock slow path.
+  bool ReaderTryLockSlow();
   // Common code between Await() and AwaitWithTimeout/Deadline()
   bool AwaitCommon(const Condition& cond,
                    synchronization_internal::KernelTimeout t);
@@ -859,8 +863,10 @@ class Condition {
     std::memcpy(callback, callback_, sizeof(*callback));
   }
 
+  static bool AlwaysTrue(const Condition*) { return true; }
+
   // Used only to create kTrue.
-  constexpr Condition() = default;
+  constexpr Condition() : eval_(AlwaysTrue), arg_(nullptr) {}
 };
 
 // -----------------------------------------------------------------------------
@@ -972,7 +978,6 @@ class CondVar {
  private:
   bool WaitCommon(Mutex* mutex, synchronization_internal::KernelTimeout t);
   void Remove(base_internal::PerThreadSynch* s);
-  void Wakeup(base_internal::PerThreadSynch* w);
   std::atomic<intptr_t> cv_;  // Condition variable state.
   CondVar(const CondVar&) = delete;
   CondVar& operator=(const CondVar&) = delete;

@@ -668,6 +668,10 @@ TNode<Int32T> CodeAssembler::TruncateFloat32ToInt32(TNode<Float32T> value) {
   return UncheckedCast<Int32T>(raw_assembler()->TruncateFloat32ToInt32(
       value, TruncateKind::kSetOverflowToMin));
 }
+TNode<Int64T> CodeAssembler::TruncateFloat64ToInt64(TNode<Float64T> value) {
+  return UncheckedCast<Int64T>(raw_assembler()->TruncateFloat64ToInt64(
+      value, TruncateKind::kSetOverflowToMin));
+}
 #define DEFINE_CODE_ASSEMBLER_UNARY_OP(name, ResType, ArgType) \
   TNode<ResType> CodeAssembler::name(TNode<ArgType> a) {       \
     return UncheckedCast<ResType>(raw_assembler()->name(a));   \
@@ -803,17 +807,17 @@ void CodeAssembler::OptimizedStoreField(MachineRepresentation rep,
 
 void CodeAssembler::OptimizedStoreIndirectPointerField(TNode<HeapObject> object,
                                                        int offset,
+                                                       IndirectPointerTag tag,
                                                        Node* value) {
-  raw_assembler()->OptimizedStoreField(
-      MachineRepresentation::kIndirectPointer, object, offset, value,
+  raw_assembler()->OptimizedStoreIndirectPointerField(
+      object, offset, tag, value,
       WriteBarrierKind::kIndirectPointerWriteBarrier);
 }
 
 void CodeAssembler::OptimizedStoreIndirectPointerFieldNoWriteBarrier(
-    TNode<HeapObject> object, int offset, Node* value) {
-  raw_assembler()->OptimizedStoreField(MachineRepresentation::kIndirectPointer,
-                                       object, offset, value,
-                                       WriteBarrierKind::kNoWriteBarrier);
+    TNode<HeapObject> object, int offset, IndirectPointerTag tag, Node* value) {
+  raw_assembler()->OptimizedStoreIndirectPointerField(
+      object, offset, tag, value, WriteBarrierKind::kNoWriteBarrier);
 }
 
 void CodeAssembler::OptimizedStoreFieldAssertNoWriteBarrier(

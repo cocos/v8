@@ -92,6 +92,7 @@
 #include "src/heap/scavenger-inl.h"
 #include "src/heap/stress-scavenge-observer.h"
 #include "src/heap/sweeper.h"
+#include "src/heap/trusted-range.h"
 #include "src/heap/zapping.h"
 #include "src/init/bootstrapper.h"
 #include "src/init/v8.h"
@@ -111,6 +112,7 @@
 #include "src/objects/slots-atomic-inl.h"
 #include "src/objects/slots-inl.h"
 #include "src/objects/visitors.h"
+#include "src/profiler/heap-profiler.h"
 #include "src/regexp/regexp.h"
 #include "src/snapshot/embedded/embedded-data.h"
 #include "src/snapshot/serializer-deserializer.h"
@@ -221,7 +223,7 @@ class ScheduleMinorGCTaskObserver final : public AllocationObserver {
     heap_->ScheduleMinorGCTaskIfNeeded();
     // Remove this observer. It will be re-added after a GC.
     DCHECK(was_added_to_space_);
-    heap_->new_space()->RemoveAllocationObserver(this);
+    heap_->allocator()->new_space_allocator()->RemoveAllocationObserver(this);
     was_added_to_space_ = false;
   }
 
@@ -235,14 +237,14 @@ class ScheduleMinorGCTaskObserver final : public AllocationObserver {
   void AddToNewSpace() {
     DCHECK(!was_added_to_space_);
     DCHECK_IMPLIES(v8_flags.minor_ms,
-                   heap_->new_space()->top() == kNullAddress);
-    heap_->new_space()->AddAllocationObserver(this);
+                   !heap_->allocator()->new_space_allocator()->IsLabValid());
+    heap_->allocator()->new_space_allocator()->AddAllocationObserver(this);
     was_added_to_space_ = true;
   }
 
   void RemoveFromNewSpace() {
     if (!was_added_to_space_) return;
-    heap_->new_space()->RemoveAllocationObserver(this);
+    heap_->allocator()->new_space_allocator()->RemoveAllocationObserver(this);
     was_added_to_space_ = false;
   }
 
@@ -1258,29 +1260,13 @@ size_t Heap::UsedGlobalHandlesSize() {
 void Heap::AddAllocationObserversToAllSpaces(
     AllocationObserver* observer, AllocationObserver* new_space_observer) {
   DCHECK(observer && new_space_observer);
-
-  for (SpaceIterator it(this); it.HasNext();) {
-    Space* space = it.Next();
-    if (space == new_space()) {
-      space->AddAllocationObserver(new_space_observer);
-    } else {
-      space->AddAllocationObserver(observer);
-    }
-  }
+  allocator()->AddAllocationObserver(observer, new_space_observer);
 }
 
 void Heap::RemoveAllocationObserversFromAllSpaces(
     AllocationObserver* observer, AllocationObserver* new_space_observer) {
   DCHECK(observer && new_space_observer);
-
-  for (SpaceIterator it(this); it.HasNext();) {
-    Space* space = it.Next();
-    if (space == new_space()) {
-      space->RemoveAllocationObserver(new_space_observer);
-    } else {
-      space->RemoveAllocationObserver(observer);
-    }
-  }
+  allocator()->RemoveAllocationObserver(observer, new_space_observer);
 }
 
 void Heap::PublishPendingAllocations() {
@@ -1516,7 +1502,7 @@ void Heap::StartMinorMSIncrementalMarkingIfNeeded() {
   if (v8_flags.concurrent_minor_ms_marking && !IsTearingDown() &&
       !ShouldOptimizeForLoadTime() && incremental_marking()->CanBeStarted() &&
       V8_LIKELY(!v8_flags.gc_global) &&
-      (new_space()->TotalCapacity() >=
+      (paged_new_space()->paged_space()->UsableCapacity() >=
        v8_flags.minor_ms_min_new_space_capacity_for_concurrent_marking_mb *
            MB) &&
       new_space()->Size() >= MinorMSConcurrentMarkingTrigger(this)) {
@@ -1667,6 +1653,11 @@ void Heap::CollectAllAvailableGarbage(GarbageCollectionReason gc_reason) {
          ++it) {
       ReportDuplicates(it->first, &it->second);
     }
+  }
+
+  if (gc_reason == GarbageCollectionReason::kLastResort &&
+      v8_flags.heap_snapshot_on_oom) {
+    isolate()->heap_profiler()->WriteSnapshotToDiskAfterGC();
   }
 }
 
@@ -1953,6 +1944,9 @@ void Heap::CollectGarbage(AllocationSpace space,
   if (!CanExpandOldGeneration(0)) {
     InvokeNearHeapLimitCallback();
     if (!CanExpandOldGeneration(0)) {
+      if (v8_flags.heap_snapshot_on_oom) {
+        isolate()->heap_profiler()->WriteSnapshotToDiskAfterGC();
+      }
       FatalProcessOutOfMemory("Reached heap limit");
     }
   }
@@ -3701,7 +3695,9 @@ void Heap::FreeMainThreadLinearAllocationAreas() {
   if (shared_space_allocator_) {
     shared_space_allocator_->FreeLinearAllocationArea();
   }
-  if (new_space()) new_space()->FreeLinearAllocationArea();
+  if (new_space()) {
+    allocator()->new_space_allocator()->FreeLinearAllocationArea();
+  }
 }
 
 void Heap::FreeSharedLinearAllocationAreas() {
@@ -5480,14 +5476,23 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
     code_page_allocator = isolate_->page_allocator();
   }
 
+  v8::PageAllocator* trusted_page_allocator;
+#ifdef V8_ENABLE_SANDBOX
+  trusted_range_ =
+      TrustedRange::EnsureProcessWideTrustedRange(kMaximalTrustedRangeSize);
+  trusted_page_allocator = trusted_range_->page_allocator();
+#else
+  trusted_page_allocator = isolate_->page_allocator();
+#endif
+
   task_runner_ = V8::GetCurrentPlatform()->GetForegroundTaskRunner(
       reinterpret_cast<v8::Isolate*>(isolate()));
 
   collection_barrier_.reset(new CollectionBarrier(this, this->task_runner_));
 
   // Set up memory allocator.
-  memory_allocator_.reset(
-      new MemoryAllocator(isolate_, code_page_allocator, MaxReserved()));
+  memory_allocator_.reset(new MemoryAllocator(
+      isolate_, code_page_allocator, trusted_page_allocator, MaxReserved()));
 
   sweeper_.reset(new Sweeper(this));
 
@@ -5620,6 +5625,20 @@ void Heap::SetUpSpaces(LinearAllocationArea& new_allocation_info,
   trusted_lo_space_ =
       static_cast<TrustedLargeObjectSpace*>(space_[TRUSTED_LO_SPACE].get());
 
+  if (isolate()->has_shared_space()) {
+    Heap* heap = isolate()->shared_space_isolate()->heap();
+
+    shared_space_allocator_ = std::make_unique<ConcurrentAllocator>(
+        main_thread_local_heap(), heap->shared_space_,
+        ConcurrentAllocator::Context::kNotGC);
+
+    shared_allocation_space_ = heap->shared_space_;
+    shared_lo_allocation_space_ = heap->shared_lo_space_;
+  }
+
+  heap_allocator_.Setup();
+  main_thread_local_heap()->SetUpMainThread();
+
   for (int i = 0; i < static_cast<int>(v8::Isolate::kUseCounterFeatureCount);
        i++) {
     deferred_counters_[i] = 0;
@@ -5644,20 +5663,7 @@ void Heap::SetUpSpaces(LinearAllocationArea& new_allocation_info,
   LOG(isolate_, IntPtrTEvent("heap-capacity", Capacity()));
   LOG(isolate_, IntPtrTEvent("heap-available", Available()));
 
-  if (new_space()) {
-    minor_gc_job_.reset(new MinorGCJob(this));
-    minor_gc_task_observer_.reset(new ScheduleMinorGCTaskObserver(this));
-  }
-
   SetGetExternallyAllocatedMemoryInBytesCallback(ReturnNull);
-
-  if (v8_flags.stress_marking > 0) {
-    stress_marking_percentage_ = NextStressMarkingLimit();
-  }
-  if (IsStressingScavenge()) {
-    stress_scavenge_observer_ = new StressScavengeObserver(this);
-    new_space()->AddAllocationObserver(stress_scavenge_observer_);
-  }
 
   write_protect_code_memory_ = v8_flags.write_protect_code_memory;
 #if V8_HEAP_USE_PKU_JIT_WRITE_PROTECT
@@ -5668,19 +5674,19 @@ void Heap::SetUpSpaces(LinearAllocationArea& new_allocation_info,
   }
 #endif  // V8_HEAP_USE_PKU_JIT_WRITE_PROTECT
 
-  if (isolate()->has_shared_space()) {
-    Heap* heap = isolate()->shared_space_isolate()->heap();
-
-    shared_space_allocator_ = std::make_unique<ConcurrentAllocator>(
-        main_thread_local_heap(), heap->shared_space_,
-        ConcurrentAllocator::Context::kNotGC);
-
-    shared_allocation_space_ = heap->shared_space_;
-    shared_lo_allocation_space_ = heap->shared_lo_space_;
+  if (new_space()) {
+    minor_gc_job_.reset(new MinorGCJob(this));
+    minor_gc_task_observer_.reset(new ScheduleMinorGCTaskObserver(this));
   }
 
-  main_thread_local_heap()->SetUpMainThread();
-  heap_allocator_.Setup();
+  if (v8_flags.stress_marking > 0) {
+    stress_marking_percentage_ = NextStressMarkingLimit();
+  }
+  if (IsStressingScavenge()) {
+    stress_scavenge_observer_ = new StressScavengeObserver(this);
+    allocator()->new_space_allocator()->AddAllocationObserver(
+        stress_scavenge_observer_);
+  }
 
   if (v8_flags.memory_balancer) {
     mb_.reset(new MemoryBalancer(this, startup_time));
@@ -5756,6 +5762,11 @@ void Heap::WeakenDescriptorArrays(
 }
 
 void Heap::NotifyDeserializationComplete() {
+  // There are no concurrent/background threads yet.
+  safepoint()->AssertMainThreadIsOnlyThread();
+
+  FreeMainThreadLinearAllocationAreas();
+
   PagedSpaceIterator spaces(this);
   for (PagedSpace* s = spaces.Next(); s != nullptr; s = spaces.Next()) {
     // Shared space is used concurrently and cannot be shrunk.
@@ -5929,7 +5940,8 @@ void Heap::TearDown() {
   stress_concurrent_allocation_observer_.reset();
 
   if (IsStressingScavenge()) {
-    new_space()->RemoveAllocationObserver(stress_scavenge_observer_);
+    allocator()->new_space_allocator()->RemoveAllocationObserver(
+        stress_scavenge_observer_);
     delete stress_scavenge_observer_;
     stress_scavenge_observer_ = nullptr;
   }
@@ -6089,25 +6101,39 @@ void Heap::CompactWeakArrayLists() {
   set_script_list(*scripts);
 }
 
-void Heap::AddRetainedMap(Handle<NativeContext> context, Handle<Map> map) {
-  DCHECK(!map->InAnySharedSpace());
-
-  if (map->is_in_retained_map_list()) {
-    return;
-  }
-
+void Heap::AddRetainedMaps(Handle<NativeContext> context,
+                           GlobalHandleVector<Map> maps) {
   Handle<WeakArrayList> array(WeakArrayList::cast(context->retained_maps()),
                               isolate());
   if (array->IsFull()) {
     CompactRetainedMaps(*array);
   }
-  array =
-      WeakArrayList::AddToEnd(isolate(), array, MaybeObjectHandle::Weak(map),
-                              Smi::FromInt(v8_flags.retain_maps_for_n_gc));
+  int cur_length = array->length();
+  array = WeakArrayList::EnsureSpace(
+      isolate(), array, cur_length + static_cast<int>(maps.size()) * 2);
   if (*array != context->retained_maps()) {
     context->set_retained_maps(*array);
   }
-  map->set_is_in_retained_map_list(true);
+
+  {
+    DisallowGarbageCollection no_gc;
+    Tagged<WeakArrayList> raw_array = *array;
+    for (Handle<Map> map : maps) {
+      DCHECK(!map->InAnySharedSpace());
+
+      if (map->is_in_retained_map_list()) {
+        continue;
+      }
+
+      raw_array->Set(cur_length, HeapObjectReference::Weak(*map));
+      raw_array->Set(cur_length + 1,
+                     Smi::FromInt(v8_flags.retain_maps_for_n_gc));
+      cur_length += 2;
+      raw_array->set_length(cur_length);
+
+      map->set_is_in_retained_map_list(true);
+    }
+  }
 }
 
 void Heap::CompactRetainedMaps(Tagged<WeakArrayList> retained_maps) {
@@ -7177,6 +7203,9 @@ uint8_t* Heap::IsMinorMarkingFlagAddress() {
   return &isolate()->isolate_data()->is_minor_marking_flag_;
 }
 
+StrongRootAllocatorBase::StrongRootAllocatorBase(v8::Isolate* isolate)
+    : StrongRootAllocatorBase(reinterpret_cast<Isolate*>(isolate)->heap()) {}
+
 // StrongRootBlocks are allocated as a block of addresses, prefixed with a
 // StrongRootsEntry pointer:
 //
@@ -7188,7 +7217,7 @@ uint8_t* Heap::IsMinorMarkingFlagAddress() {
 // The allocate method registers the range "Address 1" to "Address N" with the
 // heap as a strong root array, saves that entry in StrongRootsEntry*, and
 // returns a pointer to Address 1.
-Address* StrongRootBlockAllocator::allocate(size_t n) {
+Address* StrongRootAllocatorBase::allocate_impl(size_t n) {
   void* block = base::Malloc(sizeof(StrongRootsEntry*) + n * sizeof(Address));
 
   StrongRootsEntry** header = reinterpret_cast<StrongRootsEntry**>(block);
@@ -7196,19 +7225,19 @@ Address* StrongRootBlockAllocator::allocate(size_t n) {
                                             sizeof(StrongRootsEntry*));
 
   memset(ret, kNullAddress, n * sizeof(Address));
-  *header = heap_->RegisterStrongRoots(
-      "StrongRootBlockAllocator", FullObjectSlot(ret), FullObjectSlot(ret + n));
+  *header = heap()->RegisterStrongRoots(
+      "StrongRootAllocator", FullObjectSlot(ret), FullObjectSlot(ret + n));
 
   return ret;
 }
 
-void StrongRootBlockAllocator::deallocate(Address* p, size_t n) noexcept {
+void StrongRootAllocatorBase::deallocate_impl(Address* p, size_t n) noexcept {
   // The allocate method returns a pointer to Address 1, so the deallocate
   // method has to offset that pointer back by sizeof(StrongRootsEntry*).
   void* block = reinterpret_cast<char*>(p) - sizeof(StrongRootsEntry*);
   StrongRootsEntry** header = reinterpret_cast<StrongRootsEntry**>(block);
 
-  heap_->UnregisterStrongRoots(*header);
+  heap()->UnregisterStrongRoots(*header);
 
   base::Free(block);
 }

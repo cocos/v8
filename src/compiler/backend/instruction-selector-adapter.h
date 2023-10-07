@@ -224,6 +224,7 @@ struct TurbofanAdapter {
       DCHECK(node->opcode() == IrOpcode::kStore ||
              node->opcode() == IrOpcode::kProtectedStore ||
              node->opcode() == IrOpcode::kStoreTrapOnNull ||
+             node->opcode() == IrOpcode::kStoreIndirectPointer ||
              node->opcode() == IrOpcode::kWord32AtomicStore ||
              node->opcode() == IrOpcode::kWord64AtomicStore);
     }
@@ -233,6 +234,7 @@ struct TurbofanAdapter {
         case IrOpcode::kStore:
         case IrOpcode::kProtectedStore:
         case IrOpcode::kStoreTrapOnNull:
+        case IrOpcode::kStoreIndirectPointer:
           return StoreRepresentationOf(node_->op());
         case IrOpcode::kWord32AtomicStore:
         case IrOpcode::kWord64AtomicStore:
@@ -246,6 +248,7 @@ struct TurbofanAdapter {
         case IrOpcode::kStore:
         case IrOpcode::kProtectedStore:
         case IrOpcode::kStoreTrapOnNull:
+        case IrOpcode::kStoreIndirectPointer:
           return base::nullopt;
         case IrOpcode::kWord32AtomicStore:
         case IrOpcode::kWord64AtomicStore:
@@ -257,6 +260,7 @@ struct TurbofanAdapter {
     MemoryAccessKind access_kind() const {
       switch (node_->opcode()) {
         case IrOpcode::kStore:
+        case IrOpcode::kStoreIndirectPointer:
           return MemoryAccessKind::kNormal;
         case IrOpcode::kProtectedStore:
         case IrOpcode::kStoreTrapOnNull:
@@ -272,6 +276,13 @@ struct TurbofanAdapter {
     node_t base() const { return node_->InputAt(0); }
     node_t index() const { return node_->InputAt(1); }
     node_t value() const { return node_->InputAt(2); }
+    // TODO(saelo): once we have turboshaft everywhere, we should convert this
+    // to an operation parameter instead of an addition input (which is
+    // currently required for turbofan, since all store opcodes are cached).
+    node_t indirect_pointer_tag() const {
+      DCHECK_EQ(node_->opcode(), IrOpcode::kStoreIndirectPointer);
+      return node_->InputAt(3);
+    }
     int32_t displacement() const { return 0; }
     uint8_t element_size_log2() const { return 0; }
 
@@ -759,6 +770,7 @@ struct TurboshaftAdapter : public turboshaft::OperationMatcher {
     node_t base() const { return op_->base(); }
     node_t index() const { return op_->index(); }
     node_t value() const { return op_->value(); }
+    node_t indirect_pointer_tag() const { UNREACHABLE(); }
     int32_t displacement() const {
       static_assert(
           std::is_same_v<decltype(turboshaft::StoreOp::offset), int32_t>);
@@ -954,7 +966,7 @@ struct TurboshaftAdapter : public turboshaft::OperationMatcher {
     DCHECK(valid(value));
     const turboshaft::Operation& value_op = graph_->Get(value);
     const turboshaft::Operation& user_op = graph_->Get(user);
-    const size_t use_count = base::count_if(
+    size_t use_count = base::count_if(
         user_op.inputs(),
         [value](turboshaft::OpIndex input) { return input == value; });
     if (V8_UNLIKELY(use_count == 0)) {
@@ -985,6 +997,14 @@ struct TurboshaftAdapter : public turboshaft::OperationMatcher {
         }
       }
       return false;
+    }
+    if (value_op.Is<turboshaft::ProjectionOp>()) {
+      // Projections always have a Tuple use, but it shouldn't count as a use as
+      // far as is_exclusive_user_of is concerned, since no instructions are
+      // emitted for the TupleOp, which is just a Turboshaft "meta operation".
+      // We thus increase the use_count by 1, to attribute the TupleOp use to
+      // the current operation.
+      use_count++;
     }
     DCHECK_LE(use_count, graph_->Get(value).saturated_use_count.Get());
     return (value_op.saturated_use_count.Get() == use_count) &&

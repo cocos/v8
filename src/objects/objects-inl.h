@@ -805,8 +805,11 @@ void HeapObject::ResetLazilyInitializedExternalPointerField(size_t offset) {
   i::ResetLazilyInitializedExternalPointerField(field_address(offset));
 }
 
-Tagged<Object> HeapObject::ReadIndirectPointerField(size_t offset) const {
-  return i::ReadIndirectPointerField(field_address(offset));
+template <IndirectPointerTag tag>
+Tagged<Object> HeapObject::ReadIndirectPointerField(
+    size_t offset, Isolate* isolate, InstanceType expected_type) const {
+  return i::ReadIndirectPointerField<tag>(field_address(offset), isolate,
+                                          expected_type);
 }
 
 void HeapObject::InitCodePointerTableEntryField(size_t offset, Isolate* isolate,
@@ -839,12 +842,14 @@ InstructionStreamSlot HeapObject::RawInstructionStreamField(
   return InstructionStreamSlot(field_address(byte_offset));
 }
 
-ExternalPointerSlot HeapObject::RawExternalPointerField(int byte_offset) const {
-  return ExternalPointerSlot(field_address(byte_offset));
+ExternalPointerSlot HeapObject::RawExternalPointerField(
+    int byte_offset, ExternalPointerTag tag) const {
+  return ExternalPointerSlot(field_address(byte_offset), tag);
 }
 
-IndirectPointerSlot HeapObject::RawIndirectPointerField(int byte_offset) const {
-  return IndirectPointerSlot(field_address(byte_offset));
+IndirectPointerSlot HeapObject::RawIndirectPointerField(
+    int byte_offset, IndirectPointerTag tag) const {
+  return IndirectPointerSlot(field_address(byte_offset), tag);
 }
 
 MapWord MapWord::FromMap(const Tagged<Map> map) {

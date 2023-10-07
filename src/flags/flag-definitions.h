@@ -546,12 +546,17 @@ DEFINE_UINT(
 DEFINE_BOOL(concurrent_maglev_high_priority_threads, false,
             "use high priority compiler threads for concurrent Maglev")
 
-DEFINE_INT(max_maglev_inline_depth, 1,
-           "max depth of functions that Maglev will inline")
+DEFINE_INT(
+    max_maglev_inline_depth, 1,
+    "max depth of functions that Maglev will inline excl. small functions")
+DEFINE_INT(
+    max_maglev_hard_inline_depth, 10,
+    "max depth of functions that Maglev will inline incl. small functions")
 DEFINE_INT(max_maglev_inlined_bytecode_size, 460,
            "maximum size of bytecode for a single inlining")
 DEFINE_INT(max_maglev_inlined_bytecode_size_cumulative, 920,
-           "maximum cumulative size of bytecode considered for inlining")
+           "maximum cumulative size of bytecode considered for inlining excl. "
+           "small functions")
 DEFINE_INT(max_maglev_inlined_bytecode_size_small, 27,
            "maximum size of bytecode considered for small function inlining")
 DEFINE_FLOAT(min_maglev_inlining_frequency, 0.10,
@@ -1207,7 +1212,7 @@ DEFINE_BOOL_READONLY(
     "compress deoptimization frame translations (experimental)")
 #endif  // V8_USE_ZLIB
 DEFINE_BOOL(turbo_inline_js_wasm_calls, true, "inline JS->Wasm calls")
-DEFINE_BOOL(turbo_use_mid_tier_regalloc_for_huge_functions, true,
+DEFINE_BOOL(turbo_use_mid_tier_regalloc_for_huge_functions, false,
             "fall back to the mid-tier register allocator for huge functions")
 DEFINE_BOOL(turbo_force_mid_tier_regalloc, false,
             "always use the mid-tier register allocator (for testing)")
@@ -1222,8 +1227,6 @@ DEFINE_BOOL(turbo_collect_feedback_in_generic_lowering, false,
 DEFINE_BOOL(turboshaft, false, "enable TurboFan's Turboshaft phases for JS")
 DEFINE_WEAK_IMPLICATION(future, turboshaft)
 
-DEFINE_BOOL(turboshaft_trace_reduction, false,
-            "trace individual Turboshaft reduction steps")
 DEFINE_BOOL(turboshaft_enable_debug_features, false,
             "enables Turboshaft's DebugPrint, StaticAssert and "
             "CheckTurboshaftTypeOf operations")
@@ -1239,6 +1242,8 @@ DEFINE_EXPERIMENTAL_FEATURE(
 DEFINE_EXPERIMENTAL_FEATURE(
     turboshaft_wasm_instruction_selection,
     "run instruction selection on Turboshaft IR directly for wasm")
+DEFINE_EXPERIMENTAL_FEATURE(turboshaft_csa,
+                            "run the CSA pipeline with turboshaft")
 DEFINE_EXPERIMENTAL_FEATURE(turboshaft_load_elimination,
                             "enable Turboshaft's low-level load elimination")
 DEFINE_EXPERIMENTAL_FEATURE(turboshaft_machine_lowering_opt,
@@ -1268,6 +1273,11 @@ DEFINE_BOOL(turboshaft_verify_reductions, false,
             "inferred types")
 DEFINE_BOOL(turboshaft_trace_typing, false,
             "print typing steps of turboshaft type inference")
+DEFINE_BOOL(turboshaft_trace_reduction, false,
+            "trace individual Turboshaft reduction steps")
+#else
+DEFINE_BOOL_READONLY(turboshaft_trace_reduction, false,
+                     "trace individual Turboshaft reduction steps")
 #endif  // DEBUG
 
 // Favor memory over execution speed.
@@ -2083,6 +2093,8 @@ DEFINE_BOOL(heap_profiler_trace_objects, false,
             "Dump heap object allocations/movements/size_updates")
 DEFINE_BOOL(heap_profiler_use_embedder_graph, true,
             "Use the new EmbedderGraph API to get embedder nodes")
+DEFINE_BOOL(heap_snapshot_on_oom, false,
+            "Write a heap snapshot to disk on last-resort GCs")
 DEFINE_INT(heap_snapshot_string_limit, 1024,
            "truncate strings to this length in the heap snapshot")
 DEFINE_BOOL(heap_profiler_show_hidden_objects, false,

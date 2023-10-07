@@ -10,17 +10,21 @@ namespace internal {
 
 MainAllocator::MainAllocator(Heap* heap, SpaceWithLinearArea* space,
                              CompactionSpaceKind compaction_space_kind,
+                             SupportsExtendingLAB supports_extending_lab,
                              LinearAllocationArea& allocation_info)
     : heap_(heap),
       space_(space),
       compaction_space_kind_(compaction_space_kind),
+      supports_extending_lab_(supports_extending_lab),
       allocation_info_(allocation_info) {}
 
 MainAllocator::MainAllocator(Heap* heap, SpaceWithLinearArea* space,
-                             CompactionSpaceKind compaction_space_kind)
+                             CompactionSpaceKind compaction_space_kind,
+                             SupportsExtendingLAB supports_extending_lab)
     : heap_(heap),
       space_(space),
       compaction_space_kind_(compaction_space_kind),
+      supports_extending_lab_(supports_extending_lab),
       allocation_info_(owned_allocation_info_) {}
 
 AllocationResult MainAllocator::AllocateRawForceAlignmentForTesting(
@@ -39,7 +43,7 @@ void MainAllocator::AddAllocationObserver(AllocationObserver* observer) {
   if (!allocation_counter().IsStepInProgress()) {
     AdvanceAllocationObservers();
     allocation_counter().AddAllocationObserver(observer);
-    space_->UpdateInlineAllocationLimit();
+    UpdateInlineAllocationLimit();
   } else {
     allocation_counter().AddAllocationObserver(observer);
   }
@@ -49,7 +53,7 @@ void MainAllocator::RemoveAllocationObserver(AllocationObserver* observer) {
   if (!allocation_counter().IsStepInProgress()) {
     AdvanceAllocationObservers();
     allocation_counter().RemoveAllocationObserver(observer);
-    space_->UpdateInlineAllocationLimit();
+    UpdateInlineAllocationLimit();
   } else {
     allocation_counter().RemoveAllocationObserver(observer);
   }
@@ -59,7 +63,7 @@ void MainAllocator::PauseAllocationObservers() { AdvanceAllocationObservers(); }
 
 void MainAllocator::ResumeAllocationObservers() {
   MarkLabStartInitialized();
-  space_->UpdateInlineAllocationLimit();
+  UpdateInlineAllocationLimit();
 }
 
 void MainAllocator::AdvanceAllocationObservers() {
@@ -101,8 +105,7 @@ void MainAllocator::InvokeAllocationObservers(Address soon_object,
   DCHECK(size_in_bytes == aligned_size_in_bytes ||
          aligned_size_in_bytes == allocation_size);
 
-  if (!space_->SupportsAllocationObserver() ||
-      !heap()->IsAllocationObserverActive())
+  if (!SupportsAllocationObserver() || !heap()->IsAllocationObserverActive())
     return;
 
   if (allocation_size >= allocation_counter().NextBytes()) {
@@ -151,8 +154,8 @@ AllocationResult MainAllocator::AllocateRawSlowUnaligned(
     int size_in_bytes, AllocationOrigin origin) {
   DCHECK(!v8_flags.enable_third_party_heap);
   int max_aligned_size;
-  if (!space_->EnsureAllocation(size_in_bytes, kTaggedAligned, origin,
-                                &max_aligned_size)) {
+  if (!EnsureAllocation(size_in_bytes, kTaggedAligned, origin,
+                        &max_aligned_size)) {
     return AllocationResult::Failure();
   }
 
@@ -172,8 +175,7 @@ AllocationResult MainAllocator::AllocateRawSlowAligned(
     int size_in_bytes, AllocationAlignment alignment, AllocationOrigin origin) {
   DCHECK(!v8_flags.enable_third_party_heap);
   int max_aligned_size;
-  if (!space_->EnsureAllocation(size_in_bytes, alignment, origin,
-                                &max_aligned_size)) {
+  if (!EnsureAllocation(size_in_bytes, alignment, origin, &max_aligned_size)) {
     return AllocationResult::Failure();
   }
 
@@ -235,6 +237,10 @@ void MainAllocator::ResetLab(Address start, Address end, Address extended_end) {
   DCHECK_LE(start, end);
   DCHECK_LE(end, extended_end);
 
+  if (IsLabValid()) {
+    BasicMemoryChunk::UpdateHighWaterMark(top());
+  }
+
   allocation_info().Reset(start, end);
 
   base::Optional<base::SharedMutexGuard<base::kExclusive>> guard;
@@ -269,6 +275,65 @@ void MainAllocator::MaybeFreeUnusedLab(LinearAllocationArea lab) {
 #endif
 }
 
+bool MainAllocator::EnsureAllocation(int size_in_bytes,
+                                     AllocationAlignment alignment,
+                                     AllocationOrigin origin,
+                                     int* out_max_aligned_size) {
+  return space_->EnsureAllocation(size_in_bytes, alignment, origin,
+                                  out_max_aligned_size);
+}
+
+void MainAllocator::UpdateInlineAllocationLimit() {
+  return space_->UpdateInlineAllocationLimit();
+}
+
+void MainAllocator::FreeLinearAllocationArea() {
+  BasicMemoryChunk::UpdateHighWaterMark(top());
+  space_->FreeLinearAllocationArea();
+}
+
+void MainAllocator::ExtendLAB(Address limit) {
+  DCHECK(supports_extending_lab());
+  DCHECK_LE(limit, original_limit_relaxed());
+  allocation_info().SetLimit(limit);
+}
+
+Address MainAllocator::ComputeLimit(Address start, Address end,
+                                    size_t min_size) const {
+  DCHECK_GE(end - start, min_size);
+
+  // During GCs we always use the full LAB.
+  if (heap()->IsInGC()) return end;
+
+  if (!heap()->IsInlineAllocationEnabled()) {
+    // LABs are disabled, so we fit the requested area exactly.
+    return start + min_size;
+  }
+
+  // When LABs are enabled, pick the largest possible LAB size by default.
+  size_t step_size = end - start;
+
+  if (SupportsAllocationObserver() && heap()->IsAllocationObserverActive()) {
+    // Ensure there are no unaccounted allocations.
+    DCHECK_EQ(allocation_info().start(), allocation_info().top());
+
+    size_t step = allocation_counter().NextBytes();
+    DCHECK_NE(step, 0);
+    // Generated code may allocate inline from the linear allocation area. To
+    // make sure we can observe these allocations, we use a lower limit.
+    size_t rounded_step = static_cast<size_t>(
+        RoundDown(static_cast<int>(step - 1), ObjectAlignment()));
+    step_size = std::min(step_size, rounded_step);
+  }
+
+  if (v8_flags.stress_marking) {
+    step_size = std::min(step_size, static_cast<size_t>(64));
+  }
+
+  DCHECK_LE(start + step_size, end);
+  return start + std::max(step_size, min_size);
+}
+
 #if DEBUG
 void MainAllocator::Verify() const {
   // Ensure validity of LAB: start <= top <= limit
@@ -285,6 +350,16 @@ void MainAllocator::Verify() const {
             linear_area_original_data().get_original_limit_relaxed());
 }
 #endif  // DEBUG
+
+int MainAllocator::ObjectAlignment() const {
+  if (identity() == CODE_SPACE) {
+    return kCodeAlignment;
+  } else if (V8_COMPRESS_POINTERS_8GB_BOOL) {
+    return kObjectAlignment8GbHeap;
+  } else {
+    return kTaggedSize;
+  }
+}
 
 AllocationSpace MainAllocator::identity() const { return space_->identity(); }
 

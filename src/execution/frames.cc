@@ -1527,9 +1527,10 @@ void WasmFrame::Iterate(RootVisitor* v) const {
 void TypedFrame::IterateParamsOfWasmToJSWrapper(RootVisitor* v) const {
   Tagged<Object> maybe_signature = Tagged<Object>(
       Memory<Address>(fp() + WasmToJSWrapperConstants::kSignatureOffset));
-  // The signature slot contains a marker and not a signature, so there is
-  // nothing we have to iterate here.
   if (IsSmi(maybe_signature)) {
+    // The signature slot contains a Smi and not a signature. This means all
+    // incoming parameters have been processed, and we don't have to keep them
+    // alive anymore.
     return;
   }
 
@@ -1877,7 +1878,15 @@ bool CommonFrame::HasTaggedOutgoingParams(
   // determine where there might be tagged parameters.)
   wasm::WasmCode* wasm_callee =
       wasm::GetWasmCodeManager()->LookupCode(callee_pc());
-  return (wasm_callee == nullptr) && code_lookup->has_tagged_outgoing_params();
+  if (wasm_callee) return false;
+
+  Tagged<Code> wrapper =
+      isolate()->builtins()->code(Builtin::kWasmToJsWrapperCSA);
+  if (callee_pc() >= wrapper->instruction_start() &&
+      callee_pc() <= wrapper->instruction_end()) {
+    return false;
+  }
+  return code_lookup->has_tagged_outgoing_params();
 #else
   return code_lookup->has_tagged_outgoing_params();
 #endif  // V8_ENABLE_WEBASSEMBLY
@@ -2000,6 +2009,9 @@ void StubFrame::Summarize(std::vector<FrameSummary>* frames) const {
   // specifically exist to pretend to be another builtin throwing an
   // exception.
   switch (code->builtin_id()) {
+    case Builtin::kThrowDataViewGetInt32DetachedError:
+    case Builtin::kThrowDataViewGetInt32OutOfBounds:
+    case Builtin::kThrowDataViewGetInt32TypeError:
     case Builtin::kThrowIndexOfCalledOnNull:
     case Builtin::kThrowToLowerCaseCalledOnNull:
     case Builtin::kWasmIntToString: {
@@ -3037,13 +3049,18 @@ bool WasmFrame::at_to_number_conversion() const {
       code->builtin_id() != Builtin::kWasmToJsWrapperCSA) {
     return false;
   }
-  // The generic wasm-to-js wrapper initially pushes the signature on the stack,
-  // but overwrites the signature just before the call to JavaScript. Therefore,
-  // if the signature is still there, we are at the to-number conversion, if the
-  // slot is empty, then we are at the call to JavaScript.
-  FullObjectSlot sig_slot(callee_fp() +
-                          WasmToJSWrapperConstants::kSignatureOffset);
-  return *sig_slot.location() != kNullAddress;
+
+  // The generic wasm-to-js wrapper maintains a slot on the stack to indicate
+  // its state. Initially this slot contains the signature, so that incoming
+  // parameters can be scanned. After all parameters have been processed, the
+  // number of parameters gets stored in the stack slot, so that outgoing
+  // parameters can be scanned. After returning from JavaScript, Smi(-1) is
+  // stored in the slot to indicate that any call from now on is a ToNumber
+  // conversion.
+  Tagged<Object> maybe_sig = Tagged<Object>(Memory<Address>(
+      callee_fp() + WasmToJSWrapperConstants::kSignatureOffset));
+
+  return IsSmi(maybe_sig) && Smi::ToInt(maybe_sig) < 0;
 }
 
 int WasmFrame::LookupExceptionHandlerInTable() {

@@ -131,9 +131,12 @@ int WriteBarrier::MarkingFromCode(Address raw_host, Address raw_slot) {
 }
 
 int WriteBarrier::IndirectPointerMarkingFromCode(Address raw_host,
-                                                 Address raw_slot) {
+                                                 Address raw_slot,
+                                                 Address raw_tag) {
   Tagged<HeapObject> host = HeapObject::cast(Tagged<Object>(raw_host));
-  IndirectPointerSlot slot(raw_slot);
+  IndirectPointerTag tag = static_cast<IndirectPointerTag>(raw_tag);
+  DCHECK(IsValidIndirectPointerTag(tag));
+  IndirectPointerSlot slot(raw_slot, tag);
 
 #if DEBUG
   Heap* heap = MemoryChunk::FromHeapObject(host)->heap();

@@ -1082,7 +1082,7 @@ void Serializer::ObjectSerializer::OutputExternalReference(
 }
 
 void Serializer::ObjectSerializer::VisitExternalPointer(
-    Tagged<HeapObject> host, ExternalPointerSlot slot, ExternalPointerTag tag) {
+    Tagged<HeapObject> host, ExternalPointerSlot slot) {
   PtrComprCageBase cage_base(isolate());
   InstanceType instance_type = object_->map(cage_base)->instance_type();
   if (InstanceTypeChecker::IsForeign(instance_type) ||
@@ -1091,10 +1091,10 @@ void Serializer::ObjectSerializer::VisitExternalPointer(
       InstanceTypeChecker::IsCallHandlerInfo(instance_type)) {
     // Output raw data payload, if any.
     OutputRawData(slot.address());
-    Address value = slot.load(isolate(), tag);
+    Address value = slot.load(isolate());
     const bool sandboxify =
-        V8_ENABLE_SANDBOX_BOOL && tag != kExternalPointerNullTag;
-    OutputExternalReference(value, kSystemPointerSize, sandboxify, tag);
+        V8_ENABLE_SANDBOX_BOOL && slot.tag() != kExternalPointerNullTag;
+    OutputExternalReference(value, kSystemPointerSize, sandboxify, slot.tag());
     bytes_processed_so_far_ += kExternalPointerSlotSize;
 
   } else {
@@ -1121,11 +1121,12 @@ void Serializer::ObjectSerializer::VisitExternalPointer(
 void Serializer::ObjectSerializer::VisitIndirectPointer(
     Tagged<HeapObject> host, IndirectPointerSlot slot,
     IndirectPointerMode mode) {
-  DCHECK(V8_CODE_POINTER_SANDBOXING_BOOL);
+  DCHECK(V8_ENABLE_SANDBOX_BOOL);
 
   // The slot must be properly initialized at this point, so will always contain
   // a reference to a HeapObject.
-  Handle<HeapObject> slot_value(HeapObject::cast(slot.load()), isolate());
+  Handle<HeapObject> slot_value(HeapObject::cast(slot.load(isolate())),
+                                isolate());
   CHECK(IsHeapObject(*slot_value));
   bytes_processed_so_far_ += kIndirectPointerSlotSize;
 
@@ -1134,7 +1135,7 @@ void Serializer::ObjectSerializer::VisitIndirectPointer(
   // we cannot see pending objects here. However, we'll need to handle pending
   // objects here and in the deserializer once we reference other types of
   // objects through indirect pointers.
-  static_assert(kAllIndirectPointerObjectsAreCode);
+  CHECK_EQ(slot.tag(), kCodeIndirectPointerTag);
   DCHECK(IsJSFunction(host) && IsCode(*slot_value));
   DCHECK(!serializer_->SerializePendingObject(*slot_value));
   sink_->Put(kIndirectPointerPrefix, "IndirectPointer");
@@ -1209,7 +1210,7 @@ void Serializer::ObjectSerializer::OutputRawData(Address up_to) {
                                sizeof(field_value),
                                reinterpret_cast<const uint8_t*>(&field_value));
     } else if (IsCode(*object_, cage_base)) {
-#ifdef V8_CODE_POINTER_SANDBOXING
+#ifdef V8_ENABLE_SANDBOX
       // When the sandbox is enabled, this field contains the handle to this
       // Code object's code pointer table entry. This will be recomputed after
       // deserialization.
@@ -1225,7 +1226,7 @@ void Serializer::ObjectSerializer::OutputRawData(Address up_to) {
       OutputRawWithCustomField(sink_, object_start, base, bytes_to_output,
                                Code::kInstructionStartOffset,
                                sizeof(field_value), field_value);
-#endif  // V8_CODE_POINTER_SANDBOXING
+#endif  // V8_ENABLE_SANDBOX
     } else if (IsSeqString(*object_)) {
       // SeqStrings may contain padding. Serialize the padding bytes as 0s to
       // make the snapshot content deterministic.

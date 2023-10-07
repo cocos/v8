@@ -222,13 +222,10 @@ class LocalDeviceInstrumentationTestRun(
       install_steps = []
       post_install_steps = []
 
+      test_data_root_dir = posixpath.join(device.GetExternalStoragePath(),
+                                          _CHROMIUM_TESTS_ROOT)
       if self._test_instance.store_data_dependencies_in_temp:
         test_data_root_dir = _DEVICE_TEMP_DIR_DATA_ROOT
-      else:
-        test_data_root_dir = posixpath.join(device.GetExternalStoragePath(),
-                                            _CHROMIUM_TESTS_ROOT)
-        if self._env.force_main_user:
-          test_data_root_dir = device.ResolveSpecialPath(test_data_root_dir)
 
       if self._test_instance.replace_system_package:
         @trace_event.traced
@@ -453,24 +450,27 @@ class LocalDeviceInstrumentationTestRun(
 
       @instrumentation_tracing.no_tracing
       def push_test_data(dev):
+        device_root = test_data_root_dir
+        # Resolve the path only when need to manipulate data through adb shell
+        # commands. Don't resolve if the path is passed to app through flags.
+        if self._env.force_main_user:
+          device_root = device.ResolveSpecialPath(device_root)
         host_device_tuples_substituted = [
-            (h,
-             local_device_test_run.SubstituteDeviceRoot(d, test_data_root_dir))
+            (h, local_device_test_run.SubstituteDeviceRoot(d, device_root))
             for h, d in host_device_tuples
         ]
         logging.info('Pushing data dependencies.')
         for h, d in host_device_tuples_substituted:
           logging.debug('  %r -> %r', h, d)
-        local_device_environment.place_nomedia_on_device(
-            dev, test_data_root_dir)
+        dev.PlaceNomediaFile(device_root)
         dev.PushChangedFiles(host_device_tuples_substituted,
                              delete_device_stale=True,
                              as_root=self._env.force_main_user)
         if not host_device_tuples_substituted:
-          dev.RunShellCommand(['rm', '-rf', test_data_root_dir],
+          dev.RunShellCommand(['rm', '-rf', device_root],
                               check_return=True,
                               as_root=self._env.force_main_user)
-          dev.RunShellCommand(['mkdir', '-p', test_data_root_dir],
+          dev.RunShellCommand(['mkdir', '-p', device_root],
                               check_return=True,
                               as_root=self._env.force_main_user)
 
@@ -478,6 +478,9 @@ class LocalDeviceInstrumentationTestRun(
       def create_flag_changer(dev):
         flags = self._test_instance.flags
         webview_flags = self._test_instance.webview_flags
+
+        if '--webview-verbose-logging' not in webview_flags:
+          webview_flags.append('--webview-verbose-logging')
 
         def _get_variations_seed_path_arg(seed_path):
           seed_path_components = DevicePathComponentsFor(seed_path)
@@ -997,13 +1000,9 @@ class LocalDeviceInstrumentationTestRun(
 
             # Handling Clang coverage data.
             # TODO(b/293175593): Use device.ResolveSpecialPath for multi-user
-            if device.PathExists(device_clang_profile_dir, retries=0):
-              code_coverage_utils.PullAndMaybeMergeClangCoverageFiles(
-                  device, device_clang_profile_dir,
-                  self._test_instance.coverage_directory, coverage_basename)
-            else:
-              logging.warning('Clang coverage data folder does not exist: %s',
-                              device_clang_profile_dir)
+            code_coverage_utils.PullAndMaybeMergeClangCoverageFiles(
+                device, device_clang_profile_dir,
+                self._test_instance.coverage_directory, coverage_basename)
 
           except (OSError, base_error.BaseError) as e:
             logging.warning('Failed to handle coverage data after tests: %s', e)

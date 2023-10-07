@@ -56,6 +56,30 @@ void WasmGCTypeAnalyzer::ProcessOperations(const Block& block) {
       case Opcode::kWasmTypeCast:
         ProcessTypeCast(op.Cast<WasmTypeCastOp>());
         break;
+      case Opcode::kWasmTypeCheck:
+        ProcessTypeCheck(op.Cast<WasmTypeCheckOp>());
+        break;
+      case Opcode::kAssertNotNull:
+        ProcessAssertNotNull(op.Cast<AssertNotNullOp>());
+        break;
+      case Opcode::kNull:
+        ProcessNull(op.Cast<NullOp>());
+        break;
+      case Opcode::kIsNull:
+        ProcessIsNull(op.Cast<IsNullOp>());
+        break;
+      case Opcode::kParameter:
+        ProcessParameter(op.Cast<ParameterOp>());
+        break;
+      case Opcode::kStructGet:
+        ProcessStructGet(op.Cast<StructGetOp>());
+        break;
+      case Opcode::kStructSet:
+        ProcessStructSet(op.Cast<StructSetOp>());
+        break;
+      case Opcode::kArrayLength:
+        ProcessArrayLength(op.Cast<ArrayLengthOp>());
+        break;
       case Opcode::kBranch:
         // Handling branch conditions implying special values is handled on the
         // beginning of the successor block.
@@ -70,12 +94,55 @@ void WasmGCTypeAnalyzer::ProcessOperations(const Block& block) {
 void WasmGCTypeAnalyzer::ProcessTypeCast(const WasmTypeCastOp& type_cast) {
   OpIndex object = type_cast.object();
   wasm::ValueType target_type = type_cast.config.to;
-  // TODO(mliedtke): The cast also produces a result that is the same object as
-  // the input but that is not known, so we also need to refine the cast's
-  // result type to elide potential useless casts in chains like
-  // (ref.cast eq (ref.cast $MyStruct (local.get 0))).
   wasm::ValueType known_input_type = RefineTypeKnowledge(object, target_type);
+  // The cast also returns the input itself, so we also need to update its
+  // result type.
+  RefineTypeKnowledge(graph_.Index(type_cast), target_type);
   input_type_map_[graph_.Index(type_cast)] = known_input_type;
+}
+
+void WasmGCTypeAnalyzer::ProcessTypeCheck(const WasmTypeCheckOp& type_check) {
+  input_type_map_[graph_.Index(type_check)] =
+      types_table_.Get(type_check.object());
+}
+
+void WasmGCTypeAnalyzer::ProcessAssertNotNull(
+    const AssertNotNullOp& assert_not_null) {
+  OpIndex object = assert_not_null.object();
+  wasm::ValueType new_type = assert_not_null.type.AsNonNull();
+  wasm::ValueType known_input_type = RefineTypeKnowledge(object, new_type);
+  input_type_map_[graph_.Index(assert_not_null)] = known_input_type;
+  // AssertNotNull also returns the input.
+  RefineTypeKnowledge(graph_.Index(assert_not_null), new_type);
+}
+
+void WasmGCTypeAnalyzer::ProcessIsNull(const IsNullOp& is_null) {
+  input_type_map_[graph_.Index(is_null)] = types_table_.Get(is_null.object());
+}
+
+void WasmGCTypeAnalyzer::ProcessParameter(const ParameterOp& parameter) {
+  if (parameter.parameter_index != wasm::kWasmInstanceParameterIndex) {
+    RefineTypeKnowledge(graph_.Index(parameter),
+                        signature_->GetParam(parameter.parameter_index - 1));
+  }
+}
+
+void WasmGCTypeAnalyzer::ProcessStructGet(const StructGetOp& struct_get) {
+  // struct.get performs a null check.
+  wasm::ValueType type = RefineTypeKnowledgeNotNull(struct_get.object());
+  input_type_map_[graph_.Index(struct_get)] = type;
+}
+
+void WasmGCTypeAnalyzer::ProcessStructSet(const StructSetOp& struct_set) {
+  // struct.set performs a null check.
+  wasm::ValueType type = RefineTypeKnowledgeNotNull(struct_set.object());
+  input_type_map_[graph_.Index(struct_set)] = type;
+}
+
+void WasmGCTypeAnalyzer::ProcessArrayLength(const ArrayLengthOp& array_length) {
+  // array.len performs a null check.
+  wasm::ValueType type = RefineTypeKnowledgeNotNull(array_length.array());
+  input_type_map_[graph_.Index(array_length)] = type;
 }
 
 void WasmGCTypeAnalyzer::ProcessBranchOnTarget(const BranchOp& branch,
@@ -91,9 +158,24 @@ void WasmGCTypeAnalyzer::ProcessBranchOnTarget(const BranchOp& branch,
         input_type_map_[branch.condition()] = known_input_type;
       }
     } break;
+    case Opcode::kIsNull: {
+      const IsNullOp& is_null = condition.Cast<IsNullOp>();
+      if (branch.if_true == &target) {
+        RefineTypeKnowledge(is_null.object(),
+                            wasm::ToNullSentinel({is_null.type, module_}));
+      } else {
+        DCHECK_EQ(branch.if_false, &target);
+        RefineTypeKnowledge(is_null.object(), is_null.type.AsNonNull());
+      }
+    } break;
     default:
       break;
   }
+}
+
+void WasmGCTypeAnalyzer::ProcessNull(const NullOp& null) {
+  wasm::ValueType null_type = wasm::ToNullSentinel({null.type, module_});
+  RefineTypeKnowledge(graph_.Index(null), null_type);
 }
 
 void WasmGCTypeAnalyzer::CreateMergeSnapshot(const Block& block) {
@@ -128,6 +210,12 @@ wasm::ValueType WasmGCTypeAnalyzer::RefineTypeKnowledge(
           ? new_type
           : wasm::Intersection(previous_value, new_type, module_, module_).type;
   types_table_.Set(object, intersection_type);
+  return previous_value;
+}
+
+wasm::ValueType WasmGCTypeAnalyzer::RefineTypeKnowledgeNotNull(OpIndex object) {
+  wasm::ValueType previous_value = types_table_.Get(object);
+  types_table_.Set(object, previous_value.AsNonNull());
   return previous_value;
 }
 

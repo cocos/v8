@@ -140,12 +140,6 @@ namespace internal {
 #define V8_ENABLE_SANDBOX_BOOL false
 #endif
 
-#ifdef V8_CODE_POINTER_SANDBOXING
-#define V8_CODE_POINTER_SANDBOXING_BOOL true
-#else
-#define V8_CODE_POINTER_SANDBOXING_BOOL false
-#endif
-
 // D8's MultiMappedAllocator is only available on Linux, and only if the sandbox
 // is not enabled.
 #if V8_OS_LINUX && !V8_ENABLE_SANDBOX_BOOL
@@ -451,6 +445,10 @@ constexpr size_t kMinimumCodeRangeSize = 3 * MB;
 constexpr size_t kReservedCodeRangePages = 0;
 #endif
 
+// These constants define the total trusted space memory per process.
+constexpr size_t kMaximalTrustedRangeSize = 256 * MB;
+constexpr size_t kMinimumTrustedRangeSize = 3 * MB;
+
 #else  // V8_HOST_ARCH_64_BIT
 
 constexpr int kSystemPointerSizeLog2 = 2;
@@ -692,16 +690,6 @@ enum class TypeofMode { kInside, kNotInside };
 
 // Whether floating point registers should be saved (and restored).
 enum class SaveFPRegsMode { kIgnore, kSave };
-
-// Whether a field contains a direct (i.e. tagged) pointer to another HeapObject
-// or an indirect (i.e. an index into a pointer table) one.
-enum class PointerType { kDirect, kIndirect };
-
-// The type of pointers to Code objects. When the sandbox is enabled, these are
-// referenced through indirect pointers, otherwise regular/direct pointers.
-constexpr PointerType kCodePointerType = V8_CODE_POINTER_SANDBOXING_BOOL
-                                             ? PointerType::kIndirect
-                                             : PointerType::kDirect;
 
 // This enum describes the ownership semantics of an indirect pointer.
 enum class IndirectPointerMode {

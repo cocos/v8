@@ -337,10 +337,6 @@ declare_args() {
   # Sets -DV8_ENABLE_SANDBOX.
   v8_enable_sandbox = ""
 
-  # Enable experimental code pointer sandboxing for the V8 sandbox.
-  # Sets -DV8_CODE_POINTER_SANDBOXING
-  v8_code_pointer_sandboxing = ""
-
   # Expose the memory corruption API to JavaScript. Useful for testing the sandbox.
   # WARNING This will expose builtins that (by design) cause memory corruption.
   # Sets -DV8_EXPOSE_MEMORY_CORRUPTION_API
@@ -568,11 +564,6 @@ if (v8_enable_sandbox == "") {
                       v8_enable_external_code_space && target_os != "fuchsia"
 }
 
-if (v8_code_pointer_sandboxing == "") {
-  # By default, enable code pointer sandboxing if the sandbox is enabled.
-  v8_code_pointer_sandboxing = v8_enable_sandbox
-}
-
 if (v8_enable_static_roots == "") {
   # Static roots are only valid for builds with pointer compression and a
   # shared read-only heap.
@@ -676,9 +667,6 @@ assert(!v8_enable_sandbox || v8_enable_external_code_space,
 
 assert(!v8_enable_sandbox || !v8_enable_third_party_heap,
        "The sandbox is incompatible with the third-party heap")
-
-assert(!v8_code_pointer_sandboxing || v8_enable_sandbox,
-       "Code pointer sandboxing requires the sandbox")
 
 assert(!v8_expose_memory_corruption_api || v8_enable_sandbox,
        "The Memory Corruption API requires the sandbox")
@@ -1212,9 +1200,6 @@ config("features") {
   }
   if (v8_enable_wasm_simd256_revec) {
     defines += [ "V8_ENABLE_WASM_SIMD256_REVEC" ]
-  }
-  if (v8_code_pointer_sandboxing) {
-    defines += [ "V8_CODE_POINTER_SANDBOXING" ]
   }
   if (v8_enable_maglev_graph_printer) {
     defines += [ "V8_ENABLE_MAGLEV_GRAPH_PRINTER" ]
@@ -3588,6 +3573,7 @@ v8_header_set("v8_internal_headers") {
     "src/heap/spaces.h",
     "src/heap/sweeper.h",
     "src/heap/traced-handles-marking-visitor.h",
+    "src/heap/trusted-range.h",
     "src/heap/weak-object-worklists.h",
     "src/heap/young-generation-marking-visitor-inl.h",
     "src/heap/young-generation-marking-visitor.h",
@@ -3947,6 +3933,7 @@ v8_header_set("v8_internal_headers") {
     "src/sandbox/indirect-pointer-inl.h",
     "src/sandbox/indirect-pointer-table-inl.h",
     "src/sandbox/indirect-pointer-table.h",
+    "src/sandbox/indirect-pointer-tag.h",
     "src/sandbox/indirect-pointer.h",
     "src/sandbox/sandbox.h",
     "src/sandbox/sandboxed-pointer-inl.h",
@@ -4398,6 +4385,17 @@ v8_header_set("v8_internal_headers") {
       "src/regexp/loong64/regexp-macro-assembler-loong64.h",
       "src/wasm/baseline/loong64/liftoff-assembler-loong64.h",
     ]
+    if (v8_enable_webassembly) {
+      # Trap handling is enabled on loong64 Linux and in simulators on
+      # x64 on Linux.
+      if ((current_cpu == "loong64" && is_linux) ||
+          (current_cpu == "x64" && is_linux)) {
+        sources += [ "src/trap-handler/handler-inside-posix.h" ]
+      }
+      if (current_cpu == "x64" && is_linux) {
+        sources += [ "src/trap-handler/trap-handler-simulator.h" ]
+      }
+    }
   } else if (v8_current_cpu == "ppc") {
     sources += [
       ### gcmole(ppc) ###
@@ -5156,6 +5154,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/heap/stress-scavenge-observer.cc",
     "src/heap/sweeper.cc",
     "src/heap/traced-handles-marking-visitor.cc",
+    "src/heap/trusted-range.cc",
     "src/heap/weak-object-worklists.cc",
     "src/heap/zapping.cc",
     "src/ic/call-optimization.cc",
@@ -5667,6 +5666,20 @@ v8_source_set("v8_base_without_compiler") {
       "src/execution/loong64/simulator-loong64.cc",
       "src/regexp/loong64/regexp-macro-assembler-loong64.cc",
     ]
+    if (v8_enable_webassembly) {
+      # Trap handling is enabled on loong64 Linux and in simulators on
+      # x64 on Linux.
+      if ((current_cpu == "loong64" && is_linux) ||
+          (current_cpu == "x64" && is_linux)) {
+        sources += [
+          "src/trap-handler/handler-inside-posix.cc",
+          "src/trap-handler/handler-outside-posix.cc",
+        ]
+      }
+      if (current_cpu == "x64" && is_linux) {
+        sources += [ "src/trap-handler/handler-outside-simulator.cc" ]
+      }
+    }
   } else if (v8_current_cpu == "ppc") {
     sources += [
       ### gcmole(ppc) ###

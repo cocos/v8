@@ -314,22 +314,7 @@ void IC::OnFeedbackChanged(Isolate* isolate, Tagged<FeedbackVector> vector,
                            FeedbackSlot slot, const char* reason) {
 #ifdef V8_TRACE_FEEDBACK_UPDATES
   if (v8_flags.trace_feedback_updates) {
-    int slot_count = vector->metadata()->slot_count();
-    StdoutStream os;
-    if (slot.IsInvalid()) {
-      os << "[Feedback slots in ";
-    } else {
-      os << "[Feedback slot " << slot.ToInt() << "/" << slot_count << " in ";
-    }
-    ShortPrint(vector->shared_function_info(), os);
-    if (slot.IsInvalid()) {
-      os << " updated - ";
-    } else {
-      os << " updated to ";
-      vector->FeedbackSlotPrint(os, slot);
-      os << " - ";
-    }
-    os << reason << "]" << std::endl;
+    FeedbackVector::TraceFeedbackChange(isolate, vector, slot, reason);
   }
 #endif
 
@@ -3185,18 +3170,22 @@ bool CanFastCloneObjectWithDifferentMaps(Handle<Map> source_map,
                                          Handle<Map> target_map,
                                          Isolate* isolate) {
   DisallowGarbageCollection no_gc;
-  // TODO(olivf): Add support for non JS_OBJECT_TYPE source maps. The reason for
-  // this restriction is that the IC does not initialize the target object and
-  // instead relies on copying the source objects bytes. Thus they need to have
-  // the same binary layout.
+  // Ensure source and target have identical binary represenation of properties
+  // and elements as the IC relies on copying the raw bytes. This also excludes
+  // cases with non-enumerable properties or accessors on the source object.
   if (source_map->instance_type() != JS_OBJECT_TYPE ||
       target_map->instance_type() != JS_OBJECT_TYPE ||
       !source_map->OnlyHasSimpleProperties() ||
-      !target_map->OnlyHasSimpleProperties()) {
+      !target_map->OnlyHasSimpleProperties() ||
+      source_map->elements_kind() != target_map->elements_kind() ||
+      !source_map->has_fast_elements()) {
     return false;
   }
   // Check that the source inobject properties are big enough to initialize all
   // target slots, but not too big to fit.
+  // TODO(olivf): This restriction (and the same restriction on the backing
+  // store) could be lifted by properly initializing the target object instead
+  // of relying on copying empty slots.
   int source_inobj_properties = source_map->GetInObjectProperties();
   int target_inobj_properties = target_map->GetInObjectProperties();
   int source_used_inobj_properties =

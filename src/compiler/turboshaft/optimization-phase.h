@@ -34,15 +34,6 @@ struct PaddingSpace {
 };
 std::ostream& operator<<(std::ostream& os, PaddingSpace padding);
 
-// All operations whose `saturated_use_count` is 0 are unused and can be
-// skipped. Analyzers modify the input graph in-place when they want to mark
-// some Operations as removeable. In order to make that work for operations that
-// have no uses such as Goto and Branch, all operations that have the property
-// `IsRequiredWhenUnused()` have a non-zero `saturated_use_count`.
-V8_INLINE bool ShouldSkipOperation(const Operation& op) {
-  return op.saturated_use_count.IsZero();
-}
-
 template <template <class> class... Reducers>
 class OptimizationPhaseImpl {
  public:
@@ -52,11 +43,15 @@ class OptimizationPhaseImpl {
     Assembler<reducer_list<Reducers...>> phase(
         input_graph, input_graph.GetOrCreateCompanion(), phase_zone,
         data.node_origins());
+#ifdef DEBUG
     if (data.info()->turboshaft_trace_reduction()) {
       phase.template VisitGraph<true>();
     } else {
       phase.template VisitGraph<false>();
     }
+#else
+    phase.template VisitGraph<false>();
+#endif  // DEBUG
   }
 };
 
@@ -300,6 +295,13 @@ class GraphVisitor {
     return start;
   }
 
+  template <bool can_be_invalid = false>
+  OpIndex MapToNewGraphIfValid(OpIndex old_index, int predecessor_index = -1) {
+    return old_index.valid()
+               ? MapToNewGraph<can_be_invalid>(old_index, predecessor_index)
+               : OpIndex::Invalid();
+  }
+
  private:
   template <bool trace_reduction>
   void VisitAllBlocks() {
@@ -350,22 +352,35 @@ class GraphVisitor {
       // mappings: phis were emitted before using the old mapping, and all of
       // the other operations will use the new mapping (as they should).
 
+      // Visiting Phis and collecting their new OpIndices.
       base::SmallVector<OpIndex, 16> new_phi_values;
       for (OpIndex index : input_graph().OperationIndices(*input_block)) {
+        DCHECK_NOT_NULL(assembler().current_block());
         if (input_graph().Get(index).template Is<PhiOp>()) {
           OpIndex new_index =
               VisitOpNoMappingUpdate<trace_reduction>(index, input_block);
           new_phi_values.push_back(new_index);
+          if (!assembler().current_block()) {
+            // A reducer has detected, based on the Phis of the block that were
+            // visited so far, that we are in unreachable code (or, less likely,
+            // decided, based on some Phis only, to jump away from this block?).
+            break;
+          }
         }
       }
 
-      int phi_num = 0;
-      for (OpIndex index : input_graph().OperationIndices(*input_block)) {
-        if (input_graph().Get(index).template Is<PhiOp>()) {
-          CreateOldToNewMapping(index, new_phi_values[phi_num++]);
-        } else {
-          if (!VisitOpAndUpdateMapping<trace_reduction>(index, input_block))
-            break;
+      // Visiting everything, updating Phi mappings, and emitting non-phi
+      // operations.
+      if (assembler().current_block()) {
+        int phi_num = 0;
+        for (OpIndex index : input_graph().OperationIndices(*input_block)) {
+          if (input_graph().Get(index).template Is<PhiOp>()) {
+            CreateOldToNewMapping(index, new_phi_values[phi_num++]);
+          } else {
+            if (!VisitOpAndUpdateMapping<trace_reduction>(index, input_block)) {
+              break;
+            }
+          }
         }
       }
       if constexpr (trace_reduction) TraceBlockFinished();
@@ -435,6 +450,8 @@ class GraphVisitor {
       }
     }
 #ifdef DEBUG
+    DCHECK_IMPLIES(new_index.valid(),
+                   assembler().output_graph().BelongsToThisGraph(new_index));
     if (V8_UNLIKELY(v8_flags.turboshaft_verify_reductions)) {
       if (new_index.valid()) {
         const Operation& new_op = output_graph().Get(new_index);
@@ -850,8 +867,8 @@ class GraphVisitor {
     return assembler().ReduceStore(
         MapToNewGraph(op.base()), MapToNewGraphIfValid(op.index()),
         MapToNewGraph(op.value()), op.kind, op.stored_rep, op.write_barrier,
-        op.offset, op.element_size_log2,
-        op.maybe_initializing_or_transitioning);
+        op.offset, op.element_size_log2, op.maybe_initializing_or_transitioning,
+        op.indirect_pointer_tag());
   }
   OpIndex AssembleOutputGraphAllocate(const AllocateOp& op) {
     return assembler().FinishInitialization(
@@ -1137,6 +1154,10 @@ class GraphVisitor {
         MapToNewGraph(op.right_low()), MapToNewGraph(op.right_high()), op.kind);
   }
 
+  OpIndex AssembleOutputGraphComment(const CommentOp& op) {
+    return assembler().ReduceComment(op.message);
+  }
+
 #ifdef V8_ENABLE_WEBASSEMBLY
   OpIndex AssembleOutputGraphGlobalGet(const GlobalGetOp& op) {
     return assembler().ReduceGlobalGet(MapToNewGraph(op.instance()), op.global);
@@ -1283,6 +1304,10 @@ class GraphVisitor {
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   void CreateOldToNewMapping(OpIndex old_index, OpIndex new_index) {
+    DCHECK(old_index.valid());
+    DCHECK(assembler().input_graph().BelongsToThisGraph(old_index));
+    DCHECK_IMPLIES(new_index.valid(),
+                   assembler().output_graph().BelongsToThisGraph(new_index));
     if constexpr (reducer_list_contains<typename Assembler::ReducerList,
                                         VariableReducer>::value) {
       if (current_block_needs_variables_) {
@@ -1304,13 +1329,6 @@ class GraphVisitor {
     }
     DCHECK(!op_mapping_[old_index].valid());
     op_mapping_[old_index] = new_index;
-  }
-
-  template <bool can_be_invalid = false>
-  OpIndex MapToNewGraphIfValid(OpIndex old_index, int predecessor_index = -1) {
-    return old_index.valid()
-               ? MapToNewGraph<can_be_invalid>(old_index, predecessor_index)
-               : OpIndex::Invalid();
   }
 
   MaybeVariable GetVariableFor(OpIndex old_index) const {
