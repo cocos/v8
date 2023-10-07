@@ -611,19 +611,19 @@ config("compiler") {
 
     # TODO(crbug.com/1488374): This causes binary size growth and potentially
     # other problems.
-    if (default_toolchain != "//build/toolchain/cros:target") {
-      cflags += [
-        "-mllvm",
-        "-split-threshold-for-reg-with-hint=0",
-      ]
-      if (use_thin_lto && is_a_target_toolchain) {
-        if (is_win) {
-          ldflags += [ "-mllvm:-split-threshold-for-reg-with-hint=0" ]
-        } else {
-          ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
-        }
-      }
-    }
+    #cjh if (default_toolchain != "//build/toolchain/cros:target") {
+    #   cflags += [
+    #     "-mllvm",
+    #     "-split-threshold-for-reg-with-hint=0",
+    #   ]
+    #   if (use_thin_lto && is_a_target_toolchain) {
+    #     if (is_win) {
+    #       ldflags += [ "-mllvm:-split-threshold-for-reg-with-hint=0" ]
+    #     } else {
+    #       ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
+    #     }
+    #   }
+    # }
 
     # TODO(crbug.com/1235145): Investigate why/if this should be needed.
     if (is_win) {
