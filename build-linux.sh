@@ -21,6 +21,7 @@ fi
 echo "Valid architecture: ${ARCH}"
 
 ARGS="target_os=\"linux\"
+is_clang=false
 use_glib=false
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
