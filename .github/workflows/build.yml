@@ -288,6 +288,34 @@ jobs:
     name: "android"
     runs-on: ubuntu-latest
     steps:
+      - name: Show ubuntu libraries
+        run: |
+          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+            echo "/usr/lib/i386-linux-gnu exists."
+            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/i386-linux-gnu doesn't not exist."
+          fi
+
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
+
+          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+            echo "/usr/lib/i386-linux-gnu exists."
+            ls -la /usr/lib/i386-linux-gnu/
+            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/i386-linux-gnu doesn't not exist."
+          fi
+
+          if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
+            echo "/usr/lib/x86_64-linux-gnu exists."
+            ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
