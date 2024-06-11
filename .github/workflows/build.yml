@@ -101,13 +101,13 @@ jobs:
     needs: build_mac
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-mac-arm64
           path: v8-mac-arm64
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-mac-x64
           path: v8-mac-x64
@@ -237,19 +237,19 @@ jobs:
     needs: build_ios
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-arm64
           path: v8-ios-arm64
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-x64
           path: v8-ios-x64
 
       - name: Download simulator-arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-simulator-arm64
           path: v8-ios-simulator-arm64
@@ -430,25 +430,25 @@ jobs:
     needs: build_android
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-arm64
           path: v8-android-arm64
 
       - name: Download arm artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-arm
           path: v8-android-arm
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-x64
           path: v8-android-x64
 
       - name: Download x86 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-x86
           path: v8-android-x86
@@ -581,13 +581,13 @@ jobs:
     needs: build_windows
     steps:
       - name: Download x64(debug) artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-windows-x64-debug
           path: v8-windows-x64-debug
 
       - name: Download x64(release) artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-windows-x64-release
           path: v8-windows-x64-release
@@ -824,13 +824,13 @@ jobs:
     needs: build_openharmony
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-oh-arm64
           path: v8-oh-arm64
 
       - name: Download arm artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-oh-arm
           path: v8-oh-arm
