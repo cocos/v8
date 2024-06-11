@@ -327,6 +327,15 @@ jobs:
           add-to-path: false
           local-cache: true
 
+      - name: Show Android NDK
+        run: |
+          echo "Show home"
+          ls -l $HOME
+          echo "Show ndk-path"
+          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}
+          echo "Show clang"
+          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
+
       - name: Clone DepotTools
         run: |
             cd ..
