@@ -191,9 +191,12 @@ jobs:
       - name: Install llvm
         run: |
           brew install llvm
-          export PATH="/usr/local/opt/llvm/bin:$PATH"
+          echo "Install llvm succeed!"
+          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
           LLVM_AR_PATH=$(which llvm-ar)
+          echo "LLVM_AR_PATH: ${LLVM_AR_PATH}"
           XCODE_DEV_PATH=$(xcode-select -p)
+          echo "XCODE_DEV_PATH: ${XCODE_DEV_PATH}"
           sudo ln -s ${LLVM_AR_PATH} ${XCODE_DEV_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-ar
 
       - name: Build ${{ matrix.arch }}
